@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 import threading
 import uuid
 import sys
@@ -8,7 +9,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_handler import get_astock_hist_data, AStockData
+from data_handler import get_astock_hist_data, load_csv_data, AStockData
 from backtest_engine import AStockBacktestEngine
 from strategies.sma_cross import SMACrossStrategy
 from strategies.momentum import MomentumStrategy
@@ -26,6 +27,32 @@ STRATEGY_MAP = {
 }
 
 tasks = {}
+
+@app.route('/api/upload', methods=['POST'])
+def upload_csv():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    filename = secure_filename(file.filename)
+    upload_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+    os.makedirs(upload_dir, exist_ok=True)
+    filepath = os.path.join(upload_dir, filename)
+    file.save(filepath)
+
+    try:
+        df = load_csv_data(filepath)
+        return jsonify({
+            'filename': filename,
+            'rows': len(df),
+            'start_date': str(df.index[0].date()) if len(df) > 0 else None,
+            'end_date': str(df.index[-1].date()) if len(df) > 0 else None,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/backtest', methods=['POST'])
 def submit_backtest():
