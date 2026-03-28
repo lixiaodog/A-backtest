@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { createChart } from 'lightweight-charts'
 import { Card, Tag } from 'antd'
 
-function TradeViewChart({ data, trades, result }) {
+function TradeViewChart({ data, trades, result, stock, style }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const candlestickSeriesRef = useRef(null)
@@ -20,8 +20,8 @@ function TradeViewChart({ data, trades, result }) {
         vertLines: { color: '#2a2a4a' },
         horzLines: { color: '#2a2a4a' },
       },
-      width: containerRef.current.clientWidth,
-      height: 350,
+      width: containerRef.current.clientWidth || 800,
+      height: containerRef.current.clientHeight || 280,
     })
 
     const candlestickSeries = chart.addCandlestickSeries({
@@ -111,7 +111,8 @@ function TradeViewChart({ data, trades, result }) {
   const renderResultTags = () => {
     if (!result) return null
     return (
-      <div style={{ display: 'flex', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <span style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>{stock || '600519'}</span>
         <Tag color="blue">成交 {trades?.length || 0} 笔</Tag>
         <Tag color={result.return_rate >= 0 ? 'green' : 'red'}>
           最终 ¥{result.final_cash?.toFixed(0) || '0'}
@@ -124,8 +125,8 @@ function TradeViewChart({ data, trades, result }) {
   }
 
   return (
-    <Card size="small" title="K线图表" extra={renderResultTags()} style={{ height: '100%' }}>
-      <div ref={containerRef} style={{ width: '100%' }} />
+    <Card size="small" title="K线图表" extra={renderResultTags()} style={{ ...style, height: '100%' }} styles={{ body: { height: 'calc(100% - 57px)', padding: 0 } }}>
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
     </Card>
   )
 }

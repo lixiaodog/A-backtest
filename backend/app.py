@@ -6,6 +6,7 @@ import threading
 import uuid
 import sys
 import os
+import backtrader as bt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -132,12 +133,16 @@ def run_backtest(task_id, params):
         socketio.emit('progress', {
             'task_id': task_id,
             'status': 'running',
-            'message': '回测进行中...'
+            'message': '回测进行中...',
+            'current_step': 0,
+            'total_steps': total_bars,
+            'progress': 0
         })
 
         engine.run()
 
         final_result = engine.print_results()
+        analysis_data = engine.get_analysis_data()
 
         trades = []
         if engine.results and len(engine.results) > 0:
@@ -174,7 +179,8 @@ def run_backtest(task_id, params):
             'return_rate': final_result['return_rate'],
             'total_bars': total_bars,
             'chart_data': chart_data,
-            'trades': trades
+            'trades': trades,
+            'analysis': analysis_data
         }
 
         socketio.emit('progress', {

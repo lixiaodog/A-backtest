@@ -20,7 +20,7 @@ class AStockCommission:
 
     def getcommission(self, size, price):
         if size < 0:
-            return abs(size) * price * self._stamp_duty + abs(size) * self._transfer_fee
+            return abs(size) * price * self._stamp_duty + abs(size) * price * self._transfer_fee
         else:
             return abs(size) * price * self._commission
 
@@ -33,6 +33,7 @@ class AStockBacktestEngine:
 
         self.initial_cash = initial_cash
         self.results = None
+        self._analyzers = {}
 
     def add_data(self, datafeed):
         self.cerebro.adddata(datafeed)
@@ -43,9 +44,55 @@ class AStockBacktestEngine:
         self.cerebro.addstrategy(strategy_class, **kwargs)
 
     def run(self):
+        self.cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+        self.cerebro.addanalyzer(bt.analyzers.DrawDown)
+        self.cerebro.addanalyzer(bt.analyzers.TradeAnalyzer)
+
         print(f"初始资金: {self.cerebro.broker.getcash():.2f}")
         self.results = self.cerebro.run()
+
+        for analyzer in self.results[0].analyzers:
+            self._analyzers[type(analyzer).__name__] = analyzer
+
         return self.results
+
+    def get_analysis_data(self):
+        equity_data = []
+        if 'TimeReturn' in self._analyzers:
+            timereturn_analysis = self._analyzers['TimeReturn'].get_analysis()
+            for i, (date, value) in enumerate(timereturn_analysis.items()):
+                equity_data.append({'step': i, 'value': value, 'date': str(date)})
+
+        drawdown_data = []
+        if 'DrawDown' in self._analyzers:
+            drawdown_analysis = self._analyzers['DrawDown'].get_analysis()
+            drawdown_data.append({
+                'len': drawdown_analysis.get('len', 0),
+                'drawdown': drawdown_analysis.get('drawdown', 0),
+                'moneydown': drawdown_analysis.get('moneydown', 0),
+                'max': drawdown_analysis.get('max', {}).get('drawdown', 0)
+            })
+
+        trade_analysis = self._analyzers.get('TradeAnalyzer', None)
+
+        stats = {
+            'final_cash': self.cerebro.broker.getvalue(),
+            'total_return': self.cerebro.broker.getvalue() - self.initial_cash,
+            'return_rate': ((self.cerebro.broker.getvalue() / self.initial_cash) - 1) * 100 if self.initial_cash > 0 else 0,
+        }
+
+        if trade_analysis:
+            ta = trade_analysis.get_analysis()
+            stats['total_trades'] = ta.get('total', {}).get('total', 0) or 0
+            stats['closed_trades'] = ta.get('total', {}).get('closed', 0) or 0
+            stats['won_trades'] = ta.get('won', {}).get('total', 0) or 0
+            stats['lost_trades'] = ta.get('lost', {}).get('total', 0) or 0
+
+        return {
+            'equity_data': equity_data,
+            'drawdown_data': drawdown_data,
+            'stats': stats
+        }
 
     def print_results(self):
         final_cash = self.cerebro.broker.getvalue()
