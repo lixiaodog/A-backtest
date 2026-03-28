@@ -1,0 +1,5 @@
+backtrader==1.9.78.123
+akshare
+pandas
+matplotlib
+-i https://pypi.tuna.tsinghua.edu.cn/simple
