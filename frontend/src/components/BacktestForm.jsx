@@ -38,6 +38,7 @@ function BacktestForm({ onSubmit, loading }) {
       period: values.period || 'daily',
       params,
       cash: values.cash || 1000000,
+      stake: values.stake || 100,
     })
   }
 
@@ -54,22 +55,24 @@ function BacktestForm({ onSubmit, loading }) {
           strategy: 'sma_cross',
           period: 'daily',
           cash: 1000000,
+          stake: 100,
           fast: 10,
           slow: 30,
           rsi_period: 14,
         }}
       >
-        <Form.Item label="股票代码" name="stock" rules={[{ required: true }]}>
-          <Input placeholder="如: 600519" size="small" />
-        </Form.Item>
-
-        <Form.Item label="周期" name="period">
-          <Select size="small">
-            {periods.map(p => (
-              <Select.Option key={p.value} value={p.value}>{p.label}</Select.Option>
-            ))}
-          </Select>
-        </Form.Item>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Form.Item label="股票代码" name="stock" rules={[{ required: true }]}>
+            <Input placeholder="如: 600519" size="small" style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item label="周期" name="period">
+            <Select size="small" style={{ width: 100 }}>
+              {periods.map(p => (
+                <Select.Option key={p.value} value={p.value}>{p.label}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+        </div>
 
         <Form.Item label="日期">
           <Space>
@@ -80,14 +83,6 @@ function BacktestForm({ onSubmit, loading }) {
               <DatePicker size="small" placeholder="结束" format="YYYYMMDD" />
             </Form.Item>
           </Space>
-        </Form.Item>
-
-        <Form.Item label="策略" name="strategy">
-          <Select size="small" onChange={setSelectedStrategy}>
-            {strategies.map(s => (
-              <Select.Option key={s.value} value={s.value}>{s.label}</Select.Option>
-            ))}
-          </Select>
         </Form.Item>
 
         {currentStrategyParams.includes('fast') && (
@@ -108,12 +103,29 @@ function BacktestForm({ onSubmit, loading }) {
           </Form.Item>
         )}
 
+        <Form.Item label="策略" name="strategy">
+          <Select size="small" onChange={setSelectedStrategy}>
+            {strategies.map(s => (
+              <Select.Option key={s.value} value={s.value}>{s.label}</Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+
         <Form.Item label="初始资金" name="cash">
           <InputNumber
             size="small"
             min={10000}
             style={{ width: '100%' }}
             formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+          />
+        </Form.Item>
+
+        <Form.Item label="每笔股数" name="stake">
+          <InputNumber
+            size="small"
+            min={100}
+            step={100}
+            style={{ width: '100%' }}
           />
         </Form.Item>
 

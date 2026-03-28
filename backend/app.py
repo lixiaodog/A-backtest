@@ -85,7 +85,10 @@ def run_backtest(task_id, params):
         })
 
         datafeed = AStockData(dataname=df)
-        engine = AStockBacktestEngine(initial_cash=params.get('cash', 1000000))
+        engine = AStockBacktestEngine(
+            initial_cash=params.get('cash', 1000000),
+            stake=params.get('stake', 100)
+        )
         engine.add_data(datafeed)
 
         strategy_class = STRATEGY_MAP.get(strategy_name, SMACrossStrategy)

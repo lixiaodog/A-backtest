@@ -25,10 +25,11 @@ class AStockCommission:
             return abs(size) * price * self._commission
 
 class AStockBacktestEngine:
-    def __init__(self, initial_cash=1000000, commission_pct=0.0003):
+    def __init__(self, initial_cash=1000000, commission_pct=0.0003, stake=100):
         self.cerebro = bt.Cerebro()
         self.cerebro.broker.setcash(initial_cash)
         self.cerebro.broker.setcommission(commission=commission_pct)
+        self.cerebro.addsizer(bt.sizers.FixedSize, stake=stake)
 
         self.initial_cash = initial_cash
         self.results = None
