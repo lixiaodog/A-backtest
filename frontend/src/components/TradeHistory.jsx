@@ -68,33 +68,66 @@ function EquityChart({ equityData }) {
   )
 }
 
+function StatsChart({ stats }) {
+  const chartRef = useRef(null)
+
+  useEffect(() => {
+    if (!chartRef.current || !stats) return
+
+    const chart = echarts.init(chartRef.current)
+
+    const option = {
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '10%', bottom: '3%', top: '10px', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: ['总收益', '收益率\n(%)', '总交易', '盈利', '亏损'],
+        axisLine: { lineStyle: { color: '#444' } },
+        axisLabel: { color: '#888', fontSize: 11 }
+      },
+      yAxis: [
+        {
+          type: 'value',
+          position: 'left',
+          axisLine: { lineStyle: { color: '#444' } },
+          axisLabel: { color: '#888' },
+          splitLine: { lineStyle: { color: '#333' } }
+        },
+        {
+          type: 'value',
+          position: 'right',
+          axisLine: { lineStyle: { color: '#444' } },
+          axisLabel: { color: '#888' },
+          splitLine: { show: false }
+        }
+      ],
+      series: [
+        {
+          type: 'bar',
+          yAxisIndex: 0,
+          data: [Math.abs(stats.total_return || 0)],
+          itemStyle: { color: '#faad14' },
+          barWidth: '40%'
+        },
+        {
+          type: 'bar',
+          yAxisIndex: 1,
+          data: [0, Math.abs(stats.return_rate || 0), stats.total_trades || 0, stats.won_trades || 0, stats.lost_trades || 0],
+          itemStyle: { color: (params) => ['#1890ff', '#52c41a', '#ff4d4f'][params.dataIndex - 1] || '#1890ff' },
+          barWidth: '40%'
+        }
+      ]
+    }
+
+    chart.setOption(option)
+  }, [stats])
+
+  return <div ref={chartRef} style={{ width: '100%', height: 200 }} />
+}
+
 function StatsTable({ stats }) {
   if (!stats) return <div style={{ padding: 16, color: '#888' }}>暂无统计数据</div>
-
-  const items = [
-    { label: '初始资金', value: stats.initial_cash?.toFixed(2) || '0' },
-    { label: '最终资金', value: stats.final_cash?.toFixed(2) || '0' },
-    { label: '总收益', value: stats.total_return?.toFixed(2) || '0' },
-    { label: '收益率', value: `${(stats.return_rate || 0).toFixed(2)}%` },
-    { label: '总交易数', value: stats.total_trades || 0 },
-    { label: '盈利交易', value: stats.won_trades || 0 },
-    { label: '亏损交易', value: stats.lost_trades || 0 },
-  ]
-
-  return (
-    <div style={{ padding: 16 }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <tbody>
-          {items.map((item, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid #333' }}>
-              <td style={{ padding: '8px 0', color: '#888' }}>{item.label}</td>
-              <td style={{ padding: '8px 0', textAlign: 'right', color: '#fff' }}>{item.value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+  return <StatsChart stats={stats} />
 }
 
 function TradeHistory({ trades, analysis }) {
