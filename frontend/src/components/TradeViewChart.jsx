@@ -63,7 +63,13 @@ function TradeViewChart({ data, trades, result }) {
   }, [])
 
   useEffect(() => {
-    if (!data || data.length === 0 || !candlestickSeriesRef.current) return
+    if (!candlestickSeriesRef.current) return
+
+    if (!data || data.length === 0) {
+      candlestickSeriesRef.current.setData([])
+      volumeSeriesRef.current.setData([])
+      return
+    }
 
     const chartData = data.map(d => ({
       time: d.time,
@@ -108,10 +114,10 @@ function TradeViewChart({ data, trades, result }) {
       <div style={{ display: 'flex', gap: 4 }}>
         <Tag color="blue">成交 {trades?.length || 0} 笔</Tag>
         <Tag color={result.return_rate >= 0 ? 'green' : 'red'}>
-          盈利 ¥{result.total_return?.toFixed(2) || '0.00'}
+          最终 ¥{result.final_cash?.toFixed(0) || '0'}
         </Tag>
-        <Tag color="purple">
-          收益率 {result.return_rate?.toFixed(2) || '0.00'}%
+        <Tag color={result.return_rate >= 0 ? 'green' : 'red'}>
+          {result.return_rate >= 0 ? '+' : ''}{result.return_rate?.toFixed(2) || '0.00'}%
         </Tag>
       </div>
     )

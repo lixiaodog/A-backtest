@@ -69,6 +69,7 @@ function App() {
     setLoading(true)
     setStatus('pending')
     setProgress(0)
+    setMessage('')
     setResult(null)
     setChartData([])
     setTrades([])

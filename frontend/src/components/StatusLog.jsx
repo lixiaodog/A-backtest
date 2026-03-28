@@ -19,10 +19,6 @@ function StatusLog({ status, progress, message, result }) {
   if (message) {
     logs.push(message)
   }
-  if (result) {
-    logs.push(`最终资金: ¥${result.final_cash?.toFixed(2)}`)
-    logs.push(`收益率: ${result.return_rate?.toFixed(2)}%`)
-  }
 
   return (
     <Card
