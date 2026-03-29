@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { createChart } from 'lightweight-charts'
 import { Card, Tag } from 'antd'
 
-function TradeViewChart({ data, trades, result, stock, style }) {
+function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, style }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const candlestickSeriesRef = useRef(null)
@@ -107,6 +107,52 @@ function TradeViewChart({ data, trades, result, stock, style }) {
       candlestickSeriesRef.current.setMarkers(markers)
     }
   }, [data, trades])
+
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !liveData || liveData.length === 0) return
+    if (data && data.length > 0) return
+
+    const chartData = liveData.map(d => ({
+      time: d.time,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    }))
+
+    const volumeData = liveData.map(d => ({
+      time: d.time,
+      value: d.volume,
+      color: d.close >= d.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+    }))
+
+    try {
+      candlestickSeriesRef.current.setData(chartData)
+      volumeSeriesRef.current.setData(volumeData)
+      chartRef.current.timeScale().fitContent()
+    } catch (e) {
+      console.log('Chart setData error:', e)
+    }
+  }, [liveData, data])
+
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !liveSignals || liveSignals.length === 0) return
+    if (data && data.length > 0) return
+
+    const markers = liveSignals.map(signal => ({
+      time: signal.time,
+      position: signal.trade_type === 'buy' ? 'belowBar' : 'aboveBar',
+      color: signal.trade_type === 'buy' ? '#FF00FF' : '#00FF00',
+      shape: signal.trade_type === 'buy' ? 'arrowUp' : 'arrowDown',
+      text: signal.trade_type === 'buy' ? '买入' : '卖出',
+    }))
+
+    try {
+      candlestickSeriesRef.current.setMarkers(markers)
+    } catch (e) {
+      console.log('Set markers error:', e)
+    }
+  }, [liveSignals, data])
 
   const renderResultTags = () => {
     if (!result) return null

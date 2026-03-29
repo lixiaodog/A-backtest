@@ -57,6 +57,10 @@ class BaseStrategy(bt.Strategy):
         self.buyprice = None
         self.buycomm = None
         self.trades = []
+        self._signal_callback = None
+
+    def set_signal_callback(self, callback):
+        self._signal_callback = callback
 
     def next(self):
         pass

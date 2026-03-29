@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from 'react'
 import { Card, Table, Tag, Tabs } from 'antd'
 import * as echarts from 'echarts'
 
-function EquityChart({ equityData }) {
+function EquityChart({ equityData, visible }) {
   const chartRef = useRef(null)
 
   useEffect(() => {
@@ -10,28 +10,31 @@ function EquityChart({ equityData }) {
 
     const chart = echarts.init(chartRef.current)
 
-    const data = equityData.map(d => d.value || 0)
+    const data = equityData.map(d => d.value * 100 || 0)
+    const labels = equityData.map(d => d.date || '')
 
     const option = {
       tooltip: {
         trigger: 'axis',
         formatter: (params) => {
+          const idx = params[0]?.dataIndex
           const value = params[0]?.value?.toFixed(2) || 0
-          return `资金: ${value}`
+          return `${labels[idx] || ''}<br/>资金: ${value}`
         }
       },
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '3%',
+        bottom: '12%',
         top: '10px',
         containLabel: true
       },
       xAxis: {
         type: 'category',
-        data: equityData.map((_, i) => i),
+        data: labels,
         axisLine: { lineStyle: { color: '#444' } },
-        axisLabel: { color: '#888' }
+        axisLabel: { color: '#888' },
+        splitLine: { show: false }
       },
       yAxis: {
         type: 'value',
@@ -39,8 +42,9 @@ function EquityChart({ equityData }) {
         axisLabel: {
           color: '#888',
           formatter: (value) => {
-            if (value >= 10000) return (value / 10000).toFixed(0) + '万'
-            return value.toFixed(0)
+            if (Math.abs(value) >= 10000) return (value / 10000).toFixed(2) + '万'
+            if (Math.abs(value) >= 1) return value.toFixed(2)
+            return value.toFixed(4)
           }
         },
         splitLine: { lineStyle: { color: '#333' } }
@@ -61,14 +65,20 @@ function EquityChart({ equityData }) {
     }
 
     chart.setOption(option)
-  }, [equityData])
+
+    const timeout = setTimeout(() => chart.resize(), 100)
+    return () => {
+      clearTimeout(timeout)
+      chart.dispose()
+    }
+  }, [equityData, visible])
 
   return (
-    <div ref={chartRef} style={{ width: '100%', height: 200 }} />
+    <div ref={chartRef} style={{ width: '100%', height: 280 }} />
   )
 }
 
-function StatsChart({ stats }) {
+function StatsChart({ stats, visible }) {
   const chartRef = useRef(null)
 
   useEffect(() => {
@@ -78,7 +88,7 @@ function StatsChart({ stats }) {
 
     const option = {
       tooltip: { trigger: 'axis' },
-      grid: { left: '3%', right: '10%', bottom: '3%', top: '10px', containLabel: true },
+      grid: { left: '3%', right: '10%', bottom: '15%', top: '10px', containLabel: true },
       xAxis: {
         type: 'category',
         data: ['总收益', '收益率\n(%)', '总交易', '盈利', '亏损'],
@@ -120,17 +130,24 @@ function StatsChart({ stats }) {
     }
 
     chart.setOption(option)
-  }, [stats])
+
+    const timeout = setTimeout(() => chart.resize(), 100)
+    return () => {
+      clearTimeout(timeout)
+      chart.dispose()
+    }
+  }, [stats, visible])
 
   return <div ref={chartRef} style={{ width: '100%', height: 200 }} />
 }
 
-function StatsTable({ stats }) {
+function StatsTable({ stats, visible }) {
   if (!stats) return <div style={{ padding: 16, color: '#888' }}>暂无统计数据</div>
-  return <StatsChart stats={stats} />
+  return <StatsChart stats={stats} visible={visible} />
 }
 
 function TradeHistory({ trades, analysis }) {
+  const [activeTab, setActiveTab] = React.useState('trades')
   const columns = [
     {
       title: '时间',
@@ -209,7 +226,7 @@ function TradeHistory({ trades, analysis }) {
       key: 'equity',
       label: '收益曲线',
       children: analysis?.equity_data?.length > 0 ? (
-        <EquityChart equityData={analysis.equity_data} />
+        <EquityChart equityData={analysis.equity_data} visible={activeTab === 'equity'} />
       ) : (
         <p style={{ textAlign: 'center', color: '#999' }}>暂无收益数据</p>
       )
@@ -217,7 +234,22 @@ function TradeHistory({ trades, analysis }) {
     {
       key: 'stats',
       label: '数据统计',
-      children: <StatsTable stats={analysis?.stats} />
+      children: <StatsTable stats={analysis?.stats} visible={activeTab === 'stats'} />
+    },
+    {
+      key: 'backtrader',
+      label: 'Backtrader图表',
+      children: analysis?.chart_image_url ? (
+        <div style={{ width: '100%', textAlign: 'center' }}>
+          <img
+            src={`http://localhost:5000${analysis.chart_image_url}`}
+            alt="Backtrader回测图表"
+            style={{ maxWidth: '100%', height: 'auto' }}
+          />
+        </div>
+      ) : (
+        <p style={{ textAlign: 'center', color: '#999' }}>暂无回测图表</p>
+      )
     },
   ]
 
@@ -226,6 +258,8 @@ function TradeHistory({ trades, analysis }) {
       <Tabs
         items={tabItems}
         size="small"
+        activeKey={activeTab}
+        onChange={setActiveTab}
       />
     </Card>
   )

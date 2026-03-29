@@ -1,8 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import threading
+import traceback
 import uuid
 import sys
 import os
@@ -84,6 +85,11 @@ def get_backtest_result(task_id):
 def get_strategies():
     return jsonify(list(STRATEGY_MAP.keys()))
 
+@app.route('/api/chart/<filename>')
+def serve_chart(filename):
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results')
+    return send_from_directory(results_dir, filename)
+
 def run_backtest(task_id, params):
     task = tasks[task_id]
     task['status'] = 'running'
@@ -117,6 +123,7 @@ def run_backtest(task_id, params):
             initial_cash=params.get('cash', 1000000),
             stake=params.get('stake', 100)
         )
+        engine.set_socketio(socketio, task_id)
         engine.add_data(datafeed)
 
         strategy_class = STRATEGY_MAP.get(strategy_name, SMACrossStrategy)
@@ -139,7 +146,10 @@ def run_backtest(task_id, params):
             'progress': 0
         })
 
-        engine.run()
+        try:
+            engine.run()
+        except Exception as run_err:
+            raise Exception(f"回测运行失败: {run_err}")
 
         final_result = engine.print_results()
         analysis_data = engine.get_analysis_data()
@@ -172,6 +182,15 @@ def run_backtest(task_id, params):
             })
 
         task['status'] = 'completed'
+
+        chart_image_url = None
+        try:
+            chart_image_url = engine.save_chart_image(task_id)
+        except Exception as plot_err:
+            print(f"生成回测图表失败: {plot_err}")
+
+        analysis_data['chart_image_url'] = chart_image_url
+
         task['result'] = {
             'initial_cash': final_result['initial_cash'],
             'final_cash': final_result['final_cash'],
@@ -193,10 +212,11 @@ def run_backtest(task_id, params):
     except Exception as e:
         task['status'] = 'failed'
         task['error'] = str(e)
+        traceback.print_exc()
         socketio.emit('progress', {
             'task_id': task_id,
             'status': 'failed',
-            'message': f'错误: {str(e)}'
+            'message': f'错误: {str(e)}\n{traceback.format_exc()}'
         })
 
 @socketio.on('connect')

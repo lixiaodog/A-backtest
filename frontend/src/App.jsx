@@ -23,6 +23,8 @@ function App() {
   const [socket, setSocket] = useState(null)
   const [analysis, setAnalysis] = useState(null)
   const [currentStock, setCurrentStock] = useState('')
+  const [liveChartData, setLiveChartData] = useState([])
+  const [liveSignals, setLiveSignals] = useState([])
 
   useEffect(() => {
     const newSocket = io('http://localhost:5000', {
@@ -68,6 +70,27 @@ function App() {
       }
     })
 
+    newSocket.on('backtest_chart', (data) => {
+      if (data.type === 'chart_data' && data.bar) {
+        setLiveChartData(prev => {
+          const newData = [...prev, data.bar]
+          if (newData.length > 500) newData.shift()
+          return newData
+        })
+        if (data.bar_index % 20 === 0) {
+          setProgress(Math.round((data.bar_index / 100) * 80 + 10))
+        }
+        setLogs(prev => [...prev, `[实时K线] bar_index=${data.bar_index}, close=${data.bar.close?.toFixed(2)}`])
+      }
+    })
+
+    newSocket.on('backtest_signal', (data) => {
+      if (data.type === 'trade_signal' && data.signal) {
+        setLiveSignals(prev => [...prev, data.signal])
+        setLogs(prev => [...prev, `[实时信号] ${data.signal.trade_type === 'buy' ? '买入' : '卖出'} bar_index=${data.signal.bar_index}, price=${data.signal.price?.toFixed(2)}`])
+      }
+    })
+
     setSocket(newSocket)
 
     return () => {
@@ -85,6 +108,8 @@ function App() {
     setChartData([])
     setTrades([])
     setAnalysis(null)
+    setLiveChartData([])
+    setLiveSignals([])
     setCurrentStock(values.stock)
 
     try {
@@ -109,7 +134,7 @@ function App() {
         <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
           <Col span={17} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ height: 360, background: '#1a1a2e', borderRadius: 4, position: 'relative' }}>
-              <TradeViewChart data={chartData} trades={trades} result={result} stock={currentStock} />
+              <TradeViewChart data={chartData} trades={trades} result={result} stock={currentStock} liveData={liveChartData} liveSignals={liveSignals} />
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <TradeHistory trades={trades} analysis={analysis} />

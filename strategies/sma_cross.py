@@ -20,11 +20,26 @@ class SMACrossStrategy(BaseStrategy):
         if self.order:
             return
 
+        bar_index = len(self) - 1
         if not self.position:
             if self.crossover > 0:
                 self.log(f'买入信号, 收盘价: {self.dataclose[0]:.2f}')
                 self.order = self.buy()
+                if self._signal_callback:
+                    self._signal_callback({
+                        'bar_index': bar_index,
+                        'type': 'buy',
+                        'price': float(self.dataclose[0]),
+                        'time': self.data.datetime.datetime(0).timestamp() if hasattr(self.data.datetime, 'datetime') else None
+                    })
         else:
             if self.crossover < 0:
                 self.log(f'卖出信号, 收盘价: {self.dataclose[0]:.2f}')
                 self.order = self.sell()
+                if self._signal_callback:
+                    self._signal_callback({
+                        'bar_index': bar_index,
+                        'type': 'sell',
+                        'price': float(self.dataclose[0]),
+                        'time': self.data.datetime.datetime(0).timestamp() if hasattr(self.data.datetime, 'datetime') else None
+                    })
