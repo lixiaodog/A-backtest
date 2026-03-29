@@ -19,7 +19,7 @@ const periods = [
   { value: 'monthly', label: '月线' },
 ]
 
-function BacktestForm({ onSubmit, loading, progress = 0, status }) {
+function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause, onResume }) {
   const [form] = Form.useForm()
   const [selectedStrategy, setSelectedStrategy] = useState('sma_cross')
 
@@ -160,16 +160,26 @@ function BacktestForm({ onSubmit, loading, progress = 0, status }) {
           )}
         </div>
 
-        <Button type="primary" htmlType="submit" loading={loading} block>
-          {loading ? '回测中...' : '开始回测'}
-        </Button>
+        {paused ? (
+          <Button type="primary" onClick={onResume} block style={{ backgroundColor: '#52c41a' }}>
+            恢复回测
+          </Button>
+        ) : loading ? (
+          <Button type="primary" onClick={onPause} block style={{ backgroundColor: '#faad14' }}>
+            暂停回测
+          </Button>
+        ) : (
+          <Button type="primary" htmlType="submit" loading={loading} block>
+            开始回测
+          </Button>
+        )}
 
         {(loading || status === 'completed') && (
           <Progress
             percent={status === 'completed' ? 100 : progress}
             size="small"
-            status={status === 'completed' ? 'success' : 'active'}
-            format={percent => `${percent}%`}
+            status={status === 'completed' ? 'success' : (paused ? 'exception' : 'active')}
+            format={percent => paused ? `已暂停 ${percent}%` : `${percent}%`}
             style={{ marginTop: 4 }}
           />
         )}

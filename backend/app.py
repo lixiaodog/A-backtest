@@ -30,6 +30,8 @@ STRATEGY_MAP = {
 
 tasks = {}
 
+backtest_tasks = tasks
+
 @app.route('/api/upload', methods=['POST'])
 def upload_csv():
     if 'file' not in request.files:
@@ -65,7 +67,8 @@ def submit_backtest():
         'id': task_id,
         'status': 'pending',
         'params': data,
-        'result': None
+        'result': None,
+        'engine': None
     }
     tasks[task_id] = task
 
@@ -124,6 +127,7 @@ def run_backtest(task_id, params):
             stake=params.get('stake', 100)
         )
         engine.set_socketio(socketio, task_id)
+        tasks[task_id]['engine'] = engine
         engine.add_data(datafeed)
 
         strategy_class = STRATEGY_MAP.get(strategy_name, SMACrossStrategy)
@@ -226,6 +230,30 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
+
+@socketio.on('pause_backtest')
+def handle_pause_backtest(data):
+    print(f"[DEBUG] pause_backtest called with data: {data}")
+    task_id = data.get('task_id')
+    print(f"[暂停请求] task_id={task_id}")
+    if task_id and task_id in backtest_tasks:
+        engine = backtest_tasks[task_id]['engine']
+        if engine:
+            engine.pause()
+            socketio.emit('backtest_paused', {'task_id': task_id})
+            print(f"[暂停成功] task_id={task_id}")
+    else:
+        print(f"[暂停失败] task_id not found in backtest_tasks. Available keys: {list(backtest_tasks.keys())}")
+
+@socketio.on('resume_backtest')
+def handle_resume_backtest(data):
+    task_id = data.get('task_id')
+    if task_id and task_id in backtest_tasks:
+        engine = backtest_tasks[task_id]['engine']
+        if engine:
+            engine.resume()
+            socketio.emit('backtest_resumed', {'task_id': task_id})
+            print(f"[恢复] task_id={task_id}")
 
 if __name__ == '__main__':
     print("=" * 50)

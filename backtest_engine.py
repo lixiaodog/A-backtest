@@ -1,21 +1,27 @@
-import backtrader as bt
 import os
+os.environ['MPLBACKEND'] = 'Agg'
+
+import backtrader as bt
 import uuid
 import time
+import threading
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg', force=True)
 import matplotlib.pyplot as plt
 plt.ioff()
+plt.switch_backend('Agg')
 from matplotlib.figure import Figure
 
 class RealtimeChartObserver(bt.Observer):
     lines = ('value',)
-    params = (('socketio', None), ('task_id', None), ('emit_interval', 1))
+    params = (('socketio', None), ('task_id', None), ('emit_interval', 1), ('engine', None))
 
     def __init__(self):
         self._bar_count = 0
 
     def next(self):
+        while self.params.engine and self.params.engine._paused:
+            self.params.engine._pause_event.wait()
         self._bar_count += 1
         time.sleep(0.02)
         self.lines.value[0] = self._owner.broker.getvalue()
@@ -38,7 +44,10 @@ class RealtimeChartObserver(bt.Observer):
             self.params.socketio.emit('backtest_chart', bar_data)
 
 class RealtimeSignalAnalyzer(bt.Analyzer):
-    params = (('socketio', None), ('task_id', None))
+    params = (('socketio', None), ('task_id', None), ('emit_interval', 10))
+
+    def __init__(self):
+        self._trade_count = 0
 
     def notify_order(self, order):
         if order.status in [order.Completed] and self.params.socketio:
@@ -50,11 +59,92 @@ class RealtimeSignalAnalyzer(bt.Analyzer):
                     'bar_index': len(strategy) - 1,
                     'trade_type': 'buy' if order.isbuy() else 'sell',
                     'price': float(order.executed.price),
+                    'size': float(order.executed.size),
+                    'value': float(order.executed.value),
+                    'commission': float(order.executed.comm),
                     'time': strategy.data.datetime.datetime(0).timestamp() if hasattr(strategy.data.datetime, 'datetime') else None
                 }
             }
-            print(f"[实时信号] {'买入' if order.isbuy() else '卖出'} bar_index={len(strategy) - 1}, price={order.executed.price:.2f}")
+            print(f"[实时信号] {'买入' if order.isbuy() else '卖出'} bar_index={len(strategy) - 1}, price={order.executed.price:.2f}, size={order.executed.size}, value={order.executed.value:.2f}, comm={order.executed.comm:.2f}")
             self.params.socketio.emit('backtest_signal', signal_data)
+
+class RealtimeStatsAnalyzer(bt.Analyzer):
+    params = (('socketio', None), ('task_id', None), ('emit_interval', 10), ('cash', 1000000))
+
+    def __init__(self):
+        self._bar_count = 0
+        self._won_trades = 0
+        self._lost_trades = 0
+
+    def notify_order(self, order):
+        if order.status == order.Completed:
+            if order.isbuy:
+                self._buy_trades = getattr(self, '_buy_trades', [])
+                self._buy_trades.append({'price': order.executed.price, 'size': order.executed.size})
+            else:
+                if hasattr(self, '_buy_trades') and self._buy_trades:
+                    buy_trade = self._buy_trades.pop(0)
+                    pnl = (order.executed.price - buy_trade['price']) * buy_trade['size']
+                    if pnl > 0:
+                        self._won_trades += 1
+                    else:
+                        self._lost_trades += 1
+
+    def next(self):
+        self._bar_count += 1
+        if self._bar_count % self.params.emit_interval != 0:
+            return
+
+        strategy = self.strategy
+        broker = strategy.broker
+        initial_cash = self.params.cash or 1000000
+
+        current_value = broker.getvalue()
+        equity_data = [{
+            'step': self._bar_count,
+            'time': strategy.data.datetime.datetime(0).timestamp() if hasattr(strategy.data.datetime, 'datetime') else None,
+            'value': current_value,
+            'date': str(strategy.data.datetime.date())
+        }]
+
+        stats = {
+            'final_cash': current_value,
+            'total_return': current_value - initial_cash,
+            'return_rate': ((current_value / initial_cash) - 1) * 100 if initial_cash > 0 else 0,
+            'total_trades': self._won_trades + self._lost_trades,
+            'won_trades': self._won_trades,
+            'lost_trades': self._lost_trades,
+        }
+
+        trades = []
+        for trade in strategy.trades:
+            if isinstance(trade, dict):
+                if trade.get('status') == 'Closed' or trade.get('isclosed'):
+                    trades.append({
+                        'type': 'buy' if not trade.get('issell', False) else 'sell',
+                        'price': float(trade.get('price', 0)),
+                        'date': str(trade.get('dtclose', '')),
+                        'profit': float(trade.get('pnl', 0))
+                    })
+            else:
+                if hasattr(trade, 'status') and trade.status == trade.Closed:
+                    trades.append({
+                        'type': 'buy' if trade.justlong else 'sell',
+                        'price': float(trade.price),
+                        'date': str(trade.dtclose) if hasattr(trade, 'dtclose') else None,
+                        'profit': float(trade.pnl) if hasattr(trade, 'pnl') else 0
+                    })
+
+        stats_data = {
+            'task_id': self.params.task_id,
+            'type': 'stats_update',
+            'equity_data': equity_data,
+            'stats': stats,
+            'trades': trades,
+            'bar_index': self._bar_count
+        }
+        print(f"[实时统计] bar_index={self._bar_count}, won={self._won_trades}, lost={self._lost_trades}, trades={len(trades)}")
+        self.params.socketio.emit('backtest_stats', stats_data)
 
 class AStockCommission:
     params = (
@@ -87,10 +177,24 @@ class AStockBacktestEngine:
         self._analyzers = {}
         self._socketio = None
         self._task_id = None
+        self._paused = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()
 
     def set_socketio(self, socketio, task_id):
         self._socketio = socketio
         self._task_id = task_id
+
+    def pause(self):
+        self._paused = True
+        self._pause_event.clear()
+
+    def resume(self):
+        self._paused = False
+        self._pause_event.set()
+
+    def is_paused(self):
+        return self._paused
 
     def add_data(self, datafeed):
         self.cerebro.adddata(datafeed)
@@ -110,12 +214,19 @@ class AStockBacktestEngine:
                 RealtimeChartObserver,
                 socketio=self._socketio,
                 task_id=self._task_id,
-                emit_interval=1
+                emit_interval=1,
+                engine=self
             )
             self.cerebro.addanalyzer(
                 RealtimeSignalAnalyzer,
                 socketio=self._socketio,
                 task_id=self._task_id
+            )
+            self.cerebro.addanalyzer(
+                RealtimeStatsAnalyzer,
+                socketio=self._socketio,
+                task_id=self._task_id,
+                cash=self.initial_cash
             )
 
         print(f"初始资金: {self.cerebro.broker.getcash():.2f}")
@@ -185,20 +296,39 @@ class AStockBacktestEngine:
             'return_rate': (final_cash / self.initial_cash - 1) * 100
         }
 
-    def save_chart_image(self, task_id=None):
+    def save_chart_image(self, task_id=None, width=16, height=9):
         project_root = os.path.dirname(os.path.abspath(__file__))
         results_dir = os.path.join(project_root, 'results')
         os.makedirs(results_dir, exist_ok=True)
         filename = f'backtest_{task_id or uuid.uuid4().hex[:8]}.png'
         filepath = os.path.join(results_dir, filename)
+
+        original_show = plt.show
+        plt.show = lambda *args, **kwargs: None
+
         try:
-            fig = self.cerebro.plot(style='candlestick', barup='red', bardown='green',
-                                   returnfig=True)[0][0]
-            fig.savefig(filepath, dpi=100, bbox_inches='tight')
-            plt.close(fig)
+            plt.close('all')
+
+            fig = self.cerebro.plot(style='candlestick',
+                                barup='red',
+                                bardown='green',
+                                volume=False,
+                                returnfig=True,
+                                savefig=False)
+
+            if fig and len(fig) > 0 and len(fig[0]) > 0:
+                figure = fig[0][0]
+                figure.set_size_inches(width, height)
+                figure.savefig(filepath, dpi=100, bbox_inches='tight')
+
+            plt.close('all')
+            plt.show = original_show
             return f'/api/chart/{filename}'
+
         except Exception as e:
             print(f"生成图表时出错: {e}")
+            plt.close('all')
+            plt.show = original_show
             return None
 
     def add_analyzer(self, analyzer_class, **kwargs):

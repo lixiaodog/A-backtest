@@ -17,7 +17,7 @@ function LogOutput({ logs }) {
       size="small"
       title="回测日志"
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-      bodyStyle={{ flex: 1, overflow: 'auto', padding: 8 }}
+      bodyStyle={{ flex: 1, overflow: 'hidden', padding: 8, display: 'flex', flexDirection: 'column' }}
     >
       <div
         ref={scrollRef}
@@ -29,7 +29,7 @@ function LogOutput({ logs }) {
           background: '#0d1117',
           padding: 8,
           borderRadius: 4,
-          height: '100%',
+          flex: 1,
           overflow: 'auto'
         }}
       >

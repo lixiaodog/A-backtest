@@ -7,6 +7,7 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
   const chartRef = useRef(null)
   const candlestickSeriesRef = useRef(null)
   const volumeSeriesRef = useRef(null)
+  const lastSignalCountRef = useRef(0)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -136,10 +137,14 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
   }, [liveData, data])
 
   useEffect(() => {
-    if (!candlestickSeriesRef.current || !liveSignals || liveSignals.length === 0) return
+    if (!candlestickSeriesRef.current || !liveSignals) return
     if (data && data.length > 0) return
+    if (liveSignals.length === lastSignalCountRef.current) return
 
-    const markers = liveSignals.map(signal => ({
+    const newSignals = liveSignals.slice(lastSignalCountRef.current)
+    lastSignalCountRef.current = liveSignals.length
+
+    const markers = newSignals.map(signal => ({
       time: signal.time,
       position: signal.trade_type === 'buy' ? 'belowBar' : 'aboveBar',
       color: signal.trade_type === 'buy' ? '#FF00FF' : '#00FF00',

@@ -1,25 +1,36 @@
-import React, { useRef, useEffect } from 'react'
-import { Card, Table, Tag, Tabs } from 'antd'
+import React, { useRef, useEffect, useState } from 'react'
+import { Card, Table, Tag, Tabs, Modal } from 'antd'
 import * as echarts from 'echarts'
 
-function EquityChart({ equityData, visible }) {
+function EquityChart({ equityData, liveEquity, visible }) {
   const chartRef = useRef(null)
+  const chartInstanceRef = useRef(null)
 
   useEffect(() => {
-    if (!chartRef.current || !equityData || equityData.length === 0) return
+    if (!chartRef.current) return
 
-    const chart = echarts.init(chartRef.current)
+    const dataToUse = liveEquity && liveEquity.length > 0 ? liveEquity : (equityData || [])
+    if (dataToUse.length === 0) return
 
-    const data = equityData.map(d => d.value * 100 || 0)
-    const labels = equityData.map(d => d.date || '')
+    const rawData = dataToUse.map(d => d.value || 0)
+    const initialValue = rawData.length > 0 ? rawData[0] : 1000000
+    const profitData = rawData.map(v => v - initialValue)
+    const labels = dataToUse.map(d => d.date || '')
 
-    const option = {
+    if (!chartInstanceRef.current) {
+      chartInstanceRef.current = echarts.init(chartRef.current)
+    }
+
+    const chart = chartInstanceRef.current
+    chart.setOption({
       tooltip: {
         trigger: 'axis',
         formatter: (params) => {
           const idx = params[0]?.dataIndex
-          const value = params[0]?.value?.toFixed(2) || 0
-          return `${labels[idx] || ''}<br/>资金: ${value}`
+          const value = params[0]?.value || 0
+          const sign = value >= 0 ? '+' : ''
+          const pct = rawData[idx] ? ((value / initialValue) * 100).toFixed(2) : 0
+          return `${params[0]?.axisValue || ''}<br/>收益: ${sign}${value.toFixed(2)} (${sign}${pct}%)`
         }
       },
       grid: {
@@ -29,29 +40,24 @@ function EquityChart({ equityData, visible }) {
         top: '10px',
         containLabel: true
       },
-      xAxis: {
-        type: 'category',
-        data: labels,
-        axisLine: { lineStyle: { color: '#444' } },
-        axisLabel: { color: '#888' },
-        splitLine: { show: false }
-      },
+      xAxis: { data: labels },
       yAxis: {
         type: 'value',
+        scale: true,
         axisLine: { lineStyle: { color: '#444' } },
         axisLabel: {
           color: '#888',
           formatter: (value) => {
-            if (Math.abs(value) >= 10000) return (value / 10000).toFixed(2) + '万'
-            if (Math.abs(value) >= 1) return value.toFixed(2)
-            return value.toFixed(4)
+            if (Math.abs(value) >= 10000) return (value / 10000).toFixed(0) + '万'
+            if (Math.abs(value) >= 1) return value.toFixed(0)
+            return value.toFixed(2)
           }
         },
         splitLine: { lineStyle: { color: '#333' } }
       },
       series: [{
         type: 'line',
-        data: data,
+        data: profitData,
         smooth: true,
         showSymbol: false,
         lineStyle: { color: '#1890ff', width: 2 },
@@ -62,16 +68,13 @@ function EquityChart({ equityData, visible }) {
           ])
         }
       }]
-    }
-
-    chart.setOption(option)
+    })
 
     const timeout = setTimeout(() => chart.resize(), 100)
     return () => {
       clearTimeout(timeout)
-      chart.dispose()
     }
-  }, [equityData, visible])
+  }, [equityData, liveEquity, visible])
 
   return (
     <div ref={chartRef} style={{ width: '100%', height: 280 }} />
@@ -141,12 +144,13 @@ function StatsChart({ stats, visible }) {
   return <div ref={chartRef} style={{ width: '100%', height: 200 }} />
 }
 
-function StatsTable({ stats, visible }) {
-  if (!stats) return <div style={{ padding: 16, color: '#888' }}>暂无统计数据</div>
-  return <StatsChart stats={stats} visible={visible} />
+function StatsTable({ stats, liveStats, visible }) {
+  const statsToUse = liveStats || stats
+  if (!statsToUse) return <div style={{ padding: 16, color: '#888' }}>暂无统计数据</div>
+  return <StatsChart stats={statsToUse} visible={visible} />
 }
 
-function TradeHistory({ trades, analysis }) {
+function TradeHistory({ trades, analysis, liveEquity, liveStats, liveSignals, liveTrades }) {
   const [activeTab, setActiveTab] = React.useState('trades')
   const columns = [
     {
@@ -202,7 +206,10 @@ function TradeHistory({ trades, analysis }) {
     },
   ]
 
-  const tradeList = trades || []
+  const [modalVisible, setModalVisible] = useState(false)
+  const [modalImage, setModalImage] = useState('')
+
+  const tradeList = (trades && trades.length > 0) ? trades : (liveTrades || [])
   const hasTrades = tradeList.length > 0
 
   const tabItems = [
@@ -216,7 +223,7 @@ function TradeHistory({ trades, analysis }) {
           rowKey={(record, index) => index}
           pagination={false}
           size="small"
-          scroll={{ y: 200 }}
+          scroll={{ y: 300 }}
         />
       ) : (
         <p style={{ textAlign: 'center', color: '#999' }}>暂无交易记录</p>
@@ -225,43 +232,73 @@ function TradeHistory({ trades, analysis }) {
     {
       key: 'equity',
       label: '收益曲线',
-      children: analysis?.equity_data?.length > 0 ? (
-        <EquityChart equityData={analysis.equity_data} visible={activeTab === 'equity'} />
-      ) : (
-        <p style={{ textAlign: 'center', color: '#999' }}>暂无收益数据</p>
+      children: (
+        <div style={{ height: 350 }}>
+          {(analysis?.equity_data?.length > 0 || liveEquity?.length > 0) ? (
+            <EquityChart equityData={analysis?.equity_data} liveEquity={liveEquity} visible={activeTab === 'equity'} />
+          ) : (
+            <p style={{ textAlign: 'center', color: '#999' }}>暂无收益数据</p>
+          )}
+        </div>
       )
     },
     {
       key: 'stats',
       label: '数据统计',
-      children: <StatsTable stats={analysis?.stats} visible={activeTab === 'stats'} />
+      children: (
+        <div style={{ height: 350 }}>
+          <StatsTable stats={analysis?.stats} liveStats={liveStats} visible={activeTab === 'stats'} />
+        </div>
+      )
     },
     {
       key: 'backtrader',
       label: 'Backtrader图表',
-      children: analysis?.chart_image_url ? (
-        <div style={{ width: '100%', textAlign: 'center' }}>
-          <img
-            src={`http://localhost:5000${analysis.chart_image_url}`}
-            alt="Backtrader回测图表"
-            style={{ maxWidth: '100%', height: 'auto' }}
-          />
+      children: (
+        <div style={{ height: 350, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {analysis?.chart_image_url ? (
+            <img
+              src={`http://localhost:5000${analysis.chart_image_url}`}
+              alt="Backtrader回测图表"
+              style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'pointer' }}
+              onClick={() => {
+                setModalImage(`http://localhost:5000${analysis.chart_image_url}`)
+                setModalVisible(true)
+              }}
+            />
+          ) : (
+            <p style={{ textAlign: 'center', color: '#999' }}>暂无回测图表</p>
+          )}
         </div>
-      ) : (
-        <p style={{ textAlign: 'center', color: '#999' }}>暂无回测图表</p>
       )
     },
   ]
 
   return (
-    <Card size="small" style={{ height: '100%' }}>
-      <Tabs
-        items={tabItems}
-        size="small"
-        activeKey={activeTab}
-        onChange={setActiveTab}
-      />
-    </Card>
+    <>
+      <Card size="small" style={{ height: '100%', overflow: 'hidden' }}>
+        <Tabs
+          items={tabItems}
+          size="small"
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          style={{ height: '100%' }}
+        />
+      </Card>
+      <Modal
+        open={modalVisible}
+        onCancel={() => setModalVisible(false)}
+        footer={null}
+        width="auto"
+        centered
+      >
+        <img
+          src={modalImage}
+          alt="Backtrader回测图表"
+          style={{ maxWidth: '100%', maxHeight: '80vh', display: 'block', margin: '0 auto' }}
+        />
+      </Modal>
+    </>
   )
 }
 
