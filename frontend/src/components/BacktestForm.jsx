@@ -1,12 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Form, Input, DatePicker, Select, Button, Card, InputNumber, Progress } from 'antd'
 import dayjs from 'dayjs'
-
-const strategies = [
-  { value: 'sma_cross', label: '双均线', params: ['fast', 'slow'] },
-  { value: 'momentum', label: '动量', params: [] },
-  { value: 'rsi', label: 'RSI', params: ['rsi_period'] },
-]
 
 const periods = [
   { value: '1min', label: '1分钟' },
@@ -19,9 +13,31 @@ const periods = [
   { value: 'monthly', label: '月线' },
 ]
 
-function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause, onResume, onStop }) {
+function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause, onResume, onStop, strategies = [] }) {
   const [form] = Form.useForm()
-  const [selectedStrategy, setSelectedStrategy] = useState('sma_cross')
+  const [selectedStrategy, setSelectedStrategy] = useState('')
+  const [strategyParams, setStrategyParams] = useState([])
+  const [formReady, setFormReady] = useState(false)
+
+  useEffect(() => {
+    if (strategies.length > 0 && !selectedStrategy) {
+      setSelectedStrategy(strategies[0].id)
+      setStrategyParams(strategies[0].params || [])
+      setFormReady(true)
+    }
+  }, [strategies])
+
+  useEffect(() => {
+    const strategy = strategies.find(s => s.id === selectedStrategy)
+    if (strategy) {
+      setStrategyParams(strategy.params || [])
+      const newInitialValues = { period: 'daily', cash: 1000000, stake: 100 }
+      strategy.params.forEach(p => {
+        newInitialValues[p.name] = p.default
+      })
+      form.setFieldsValue(newInitialValues)
+    }
+  }, [selectedStrategy, strategies])
 
   const isRunning = loading && !paused
   const canStart = !isRunning && !paused && status !== 'stopped'
@@ -31,10 +47,11 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
 
   const handleFinish = (values) => {
     const params = {}
-
-    if (values.fast) params.fast = values.fast
-    if (values.slow) params.slow = values.slow
-    if (values.rsi_period) params.rsi_period = values.rsi_period
+    strategyParams.forEach(p => {
+      if (values[p.name] !== undefined) {
+        params[p.name] = values[p.name]
+      }
+    })
 
     onSubmit({
       stock: values.stock,
@@ -48,7 +65,13 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
     })
   }
 
-  const currentStrategyParams = strategies.find(s => s.value === selectedStrategy)?.params || []
+  const currentStrategy = strategies.find(s => s.id === selectedStrategy)
+  const initialValues = { period: 'daily', cash: 1000000, stake: 100 }
+  if (currentStrategy) {
+    currentStrategy.params.forEach(p => {
+      initialValues[p.name] = p.default
+    })
+  }
 
   return (
     <Card size="small" title="参数设置" style={{ height: '100%', overflow: 'auto', width: '100%' }}>
@@ -56,16 +79,7 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
         form={form}
         layout="inline"
         onFinish={handleFinish}
-        initialValues={{
-          stock: '600519',
-          strategy: 'sma_cross',
-          period: 'daily',
-          cash: 1000000,
-          stake: 100,
-          fast: 10,
-          slow: 30,
-          rsi_period: 14,
-        }}
+        initialValues={initialValues}
       >
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -130,40 +144,28 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>策略</span>
             <Form.Item name="strategy" style={{ marginBottom: 0 }}>
-              <Select size="small" style={{ width: 80 }} onChange={setSelectedStrategy}>
+              <Select size="small" style={{ width: 100 }} onChange={setSelectedStrategy}>
                 {strategies.map(s => (
-                  <Select.Option key={s.value} value={s.value}>{s.label}</Select.Option>
+                  <Select.Option key={s.id} value={s.id}>{s.name}</Select.Option>
                 ))}
               </Select>
             </Form.Item>
           </div>
 
-          {currentStrategyParams.includes('fast') && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>快速</span>
-              <Form.Item name="fast" style={{ marginBottom: 0 }}>
-                <InputNumber size="small" min={1} max={100} style={{ width: 50 }} />
+          {strategyParams.map(p => (
+            <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{p.label}</span>
+              <Form.Item name={p.name} style={{ marginBottom: 0 }}>
+                <InputNumber
+                  size="small"
+                  min={p.min || 1}
+                  max={p.max || 1000}
+                  step={p.step || 1}
+                  style={{ width: 50 }}
+                />
               </Form.Item>
             </div>
-          )}
-
-          {currentStrategyParams.includes('slow') && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>慢速</span>
-              <Form.Item name="slow" style={{ marginBottom: 0 }}>
-                <InputNumber size="small" min={1} max={200} style={{ width: 50 }} />
-              </Form.Item>
-            </div>
-          )}
-
-          {currentStrategyParams.includes('rsi_period') && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>RSI</span>
-              <Form.Item name="rsi_period" style={{ marginBottom: 0 }}>
-                <InputNumber size="small" min={1} max={50} style={{ width: 50 }} />
-              </Form.Item>
-            </div>
-          )}
+          ))}
         </div>
 
         {(loading || status === 'completed') && (

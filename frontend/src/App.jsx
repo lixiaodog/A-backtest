@@ -34,6 +34,13 @@ function App() {
   const [backtestKey, setBacktestKey] = useState(0)
   const totalBarsRef = useRef(100)
   const [speed, setSpeed] = useState(100)
+  const [strategies, setStrategies] = useState([])
+
+  useEffect(() => {
+    axios.get('http://localhost:5000/api/strategies')
+      .then(res => setStrategies(res.data))
+      .catch(err => console.error('Failed to load strategies:', err))
+  }, [])
 
   useEffect(() => {
     const newSocket = io('http://localhost:5000', {
@@ -260,7 +267,7 @@ function App() {
           </Col>
           <Col span={7} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
             <div style={{ flex: '0 0 280px' }}>
-              <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} />
+              <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} strategies={strategies} />
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <LogOutput logs={logs} />

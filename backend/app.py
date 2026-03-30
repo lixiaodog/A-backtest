@@ -1,3 +1,7 @@
+import re
+import importlib
+import inspect
+import time
 from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
@@ -13,20 +17,116 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data_handler import get_astock_hist_data, load_csv_data, AStockData
 from backtest_engine import AStockBacktestEngine
-from strategies.sma_cross import SMACrossStrategy
-from strategies.momentum import MomentumStrategy
-from strategies.rsi_strategy import RSIStrategy
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'backtrader-secret'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-STRATEGY_MAP = {
-    'sma_cross': SMACrossStrategy,
-    'momentum': MomentumStrategy,
-    'rsi': RSIStrategy,
-}
+def scan_strategies():
+    strategies_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'strategies')
+    strategies = []
+    _strategy_mtimes = getattr(scan_strategies, '_mtimes', {})
+
+    if not os.path.exists(strategies_dir):
+        return strategies
+
+    for filename in os.listdir(strategies_dir):
+        if not filename.endswith('.py') or filename.startswith('__'):
+            continue
+
+        module_name = filename[:-3]
+        strategy_id = module_name
+        filepath = os.path.join(strategies_dir, filename)
+        mtime = os.path.getmtime(filepath)
+
+        try:
+            if module_name in sys.modules:
+                old_mtime = _strategy_mtimes.get(module_name, 0)
+                if mtime > old_mtime:
+                    importlib.reload(sys.modules[f'strategies.{module_name}'])
+            else:
+                importlib.import_module(f'strategies.{module_name}')
+
+            _strategy_mtimes[module_name] = mtime
+            scan_strategies._mtimes = _strategy_mtimes
+
+            module = sys.modules[f'strategies.{module_name}']
+
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if name.endswith('Strategy') and name != 'BaseStrategy' and name != 'bt.Strategy':
+                    cls = obj
+
+                    name_attr = getattr(cls, 'name', None)
+                    desc_attr = getattr(cls, 'description', None)
+
+                    strategy_name = name_attr if name_attr else strategy_id.replace('_', ' ').title()
+                    strategy_desc = desc_attr if desc_attr else ''
+
+                    params = []
+                    if hasattr(cls, 'params'):
+                        try:
+                            param_info = getattr(cls, 'params', None)
+                            if param_info is None:
+                                continue
+                            param_names = [x for x in dir(param_info) if not x.startswith('_') and x not in ('isdefault', 'notdefault', 'printlog')]
+                            for param_name in param_names:
+                                if param_name in ('printlog',):
+                                    continue
+                                try:
+                                    default_value = getattr(param_info, param_name)
+                                    if callable(default_value):
+                                        default_value = default_value()
+                                except:
+                                    default_value = None
+                                if default_value is None:
+                                    continue
+                                if isinstance(default_value, tuple):
+                                    default_value = default_value[0]
+                                param_type = 'int' if isinstance(default_value, int) else 'float' if isinstance(default_value, float) else 'str'
+                                params.append({
+                                    'name': param_name,
+                                    'label': param_name.replace('_', ' ').title(),
+                                    'type': param_type,
+                                    'default': default_value
+                                })
+                        except Exception as e:
+                            print(f"[DEBUG] Error processing params: {e}")
+
+                    strategies.append({
+                        'id': strategy_id,
+                        'name': strategy_name,
+                        'description': strategy_desc,
+                        'class': cls,
+                        'params': params
+                    })
+        except Exception as e:
+            print(f"Error loading strategy {module_name}: {e}")
+
+    return strategies
+
+scan_strategies._mtimes = {}
+
+STRATEGY_REGISTRY = scan_strategies()
+STRATEGY_MAP = {s['id']: s['class'] for s in STRATEGY_REGISTRY}
+
+def watch_strategies_folder():
+    while True:
+        time.sleep(2)
+        try:
+            global STRATEGY_REGISTRY, STRATEGY_MAP
+            new_registry = scan_strategies()
+            old_ids = set(s['id'] for s in STRATEGY_REGISTRY)
+            new_ids = set(s['id'] for s in new_registry)
+            if old_ids != new_ids or len(new_registry) != len(STRATEGY_REGISTRY):
+                STRATEGY_REGISTRY = new_registry
+                STRATEGY_MAP = {s['id']: s['class'] for s in STRATEGY_REGISTRY}
+                print(f"[策略热更新] 检测到策略变更，当前策略数: {len(STRATEGY_REGISTRY)}")
+        except Exception as e:
+            print(f"[策略监控] Error: {e}")
+
+watcher_thread = threading.Thread(target=watch_strategies_folder, daemon=True)
+watcher_thread.start()
 
 tasks = {}
 
@@ -88,7 +188,19 @@ def get_backtest_result(task_id):
 
 @app.route('/api/strategies', methods=['GET'])
 def get_strategies():
-    return jsonify(list(STRATEGY_MAP.keys()))
+    return jsonify([{
+        'id': s['id'],
+        'name': s['name'],
+        'description': s['description'],
+        'params': s['params']
+    } for s in STRATEGY_REGISTRY])
+
+@app.route('/api/strategies/refresh', methods=['POST'])
+def refresh_strategies():
+    global STRATEGY_REGISTRY, STRATEGY_MAP
+    STRATEGY_REGISTRY = scan_strategies()
+    STRATEGY_MAP = {s['id']: s['class'] for s in STRATEGY_REGISTRY}
+    return jsonify([{'id': s['id'], 'name': s['name']} for s in STRATEGY_REGISTRY])
 
 @app.route('/api/chart/<filename>')
 def serve_chart(filename):
@@ -133,7 +245,14 @@ def run_backtest(task_id, params, client_id='default'):
         engine.set_speed(params.get('speed', 100))
         engine.add_data(datafeed)
 
-        strategy_class = STRATEGY_MAP.get(strategy_name, SMACrossStrategy)
+        strategy_class = STRATEGY_MAP.get(strategy_name)
+
+        if not strategy_class:
+            socketio.emit('backtest_error', {
+                'task_id': task_id,
+                'error': f'未找到策略: {strategy_name}'
+            }, room=client_id)
+            return
 
         mapped_params = {}
         if 'fast' in strategy_params:
