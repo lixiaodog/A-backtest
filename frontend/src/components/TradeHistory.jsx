@@ -5,6 +5,9 @@ import * as echarts from 'echarts'
 function EquityChart({ equityData, liveEquity, visible }) {
   const chartRef = useRef(null)
   const chartInstanceRef = useRef(null)
+  const lastDataLengthRef = useRef(0)
+
+  const prevVisibleRef = useRef(visible)
 
   useEffect(() => {
     if (!chartRef.current) return
@@ -12,14 +15,13 @@ function EquityChart({ equityData, liveEquity, visible }) {
     const dataToUse = liveEquity && liveEquity.length > 0 ? liveEquity : (equityData || [])
     if (dataToUse.length === 0) return
 
-    const rawData = dataToUse.map(d => d.value || 0)
-    const initialValue = rawData.length > 0 ? rawData[0] : 1000000
-    const profitData = rawData.map(v => v - initialValue)
-    const labels = dataToUse.map(d => d.date || '')
-
     if (!chartInstanceRef.current) {
       chartInstanceRef.current = echarts.init(chartRef.current)
     }
+
+    const rawData = dataToUse.map(d => d.value || 0)
+    const profitData = rawData.map(v => v - (rawData[0] || 1000000))
+    const labels = dataToUse.map(d => d.date || '')
 
     const chart = chartInstanceRef.current
     chart.setOption({
@@ -29,7 +31,7 @@ function EquityChart({ equityData, liveEquity, visible }) {
           const idx = params[0]?.dataIndex
           const value = params[0]?.value || 0
           const sign = value >= 0 ? '+' : ''
-          const pct = rawData[idx] ? ((value / initialValue) * 100).toFixed(2) : 0
+          const pct = rawData[idx] ? ((value / rawData[0]) * 100).toFixed(2) : 0
           return `${params[0]?.axisValue || ''}<br/>收益: ${sign}${value.toFixed(2)} (${sign}${pct}%)`
         }
       },
@@ -70,11 +72,19 @@ function EquityChart({ equityData, liveEquity, visible }) {
       }]
     })
 
+    chartInstanceRef.current._hasData = true
     const timeout = setTimeout(() => chart.resize(), 100)
+    prevVisibleRef.current = visible
     return () => {
       clearTimeout(timeout)
     }
-  }, [equityData, liveEquity, visible])
+  }, [equityData, liveEquity])
+
+  useEffect(() => {
+    if (!chartInstanceRef.current || !chartRef.current) return
+    const timeout = setTimeout(() => chartInstanceRef.current?.resize(), 100)
+    return () => clearTimeout(timeout)
+  }, [visible])
 
   return (
     <div ref={chartRef} style={{ width: '100%', height: 280 }} />

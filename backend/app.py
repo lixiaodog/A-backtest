@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import threading
@@ -62,17 +62,19 @@ def upload_csv():
 def submit_backtest():
     data = request.json
     task_id = str(uuid.uuid4())
+    client_id = data.get('client_id', 'default')
 
     task = {
         'id': task_id,
         'status': 'pending',
         'params': data,
         'result': None,
-        'engine': None
+        'engine': None,
+        'client_id': client_id
     }
     tasks[task_id] = task
 
-    thread = threading.Thread(target=run_backtest, args=(task_id, data))
+    thread = threading.Thread(target=run_backtest, args=(task_id, data, client_id))
     thread.daemon = True
     thread.start()
 
@@ -93,7 +95,7 @@ def serve_chart(filename):
     results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results')
     return send_from_directory(results_dir, filename)
 
-def run_backtest(task_id, params):
+def run_backtest(task_id, params, client_id='default'):
     task = tasks[task_id]
     task['status'] = 'running'
 
@@ -109,7 +111,7 @@ def run_backtest(task_id, params):
             'task_id': task_id,
             'status': 'fetching_data',
             'message': '正在获取数据...'
-        })
+        }, room=client_id)
 
         df = get_astock_hist_data(stock, start_date, end_date, period)
         total_bars = len(df)
@@ -119,15 +121,16 @@ def run_backtest(task_id, params):
             'status': 'data_loaded',
             'message': f'数据加载完成，共 {total_bars} 条',
             'total_bars': total_bars
-        })
+        }, room=client_id)
 
         datafeed = AStockData(dataname=df)
         engine = AStockBacktestEngine(
             initial_cash=params.get('cash', 1000000),
             stake=params.get('stake', 100)
         )
-        engine.set_socketio(socketio, task_id)
+        engine.set_socketio(socketio, task_id, client_id)
         tasks[task_id]['engine'] = engine
+        engine.set_speed(params.get('speed', 100))
         engine.add_data(datafeed)
 
         strategy_class = STRATEGY_MAP.get(strategy_name, SMACrossStrategy)
@@ -148,7 +151,7 @@ def run_backtest(task_id, params):
             'current_step': 0,
             'total_steps': total_bars,
             'progress': 0
-        })
+        }, room=client_id)
 
         try:
             engine.run()
@@ -211,7 +214,7 @@ def run_backtest(task_id, params):
             'status': 'completed',
             'message': '回测完成',
             'result': task['result']
-        })
+        }, room=client_id)
 
     except Exception as e:
         task['status'] = 'failed'
@@ -221,26 +224,31 @@ def run_backtest(task_id, params):
             'task_id': task_id,
             'status': 'failed',
             'message': f'错误: {str(e)}\n{traceback.format_exc()}'
-        })
+        }, room=client_id)
 
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    session_id = request.sid
+    join_room(session_id)
+    print(f'Client connected: {session_id}')
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    session_id = request.sid
+    leave_room(session_id)
+    print(f'Client disconnected: {session_id}')
 
 @socketio.on('pause_backtest')
 def handle_pause_backtest(data):
     print(f"[DEBUG] pause_backtest called with data: {data}")
     task_id = data.get('task_id')
+    client_id = data.get('client_id', 'default')
     print(f"[暂停请求] task_id={task_id}")
     if task_id and task_id in backtest_tasks:
         engine = backtest_tasks[task_id]['engine']
         if engine:
             engine.pause()
-            socketio.emit('backtest_paused', {'task_id': task_id})
+            socketio.emit('backtest_paused', {'task_id': task_id}, room=client_id)
             print(f"[暂停成功] task_id={task_id}")
     else:
         print(f"[暂停失败] task_id not found in backtest_tasks. Available keys: {list(backtest_tasks.keys())}")
@@ -248,12 +256,36 @@ def handle_pause_backtest(data):
 @socketio.on('resume_backtest')
 def handle_resume_backtest(data):
     task_id = data.get('task_id')
+    client_id = data.get('client_id', 'default')
     if task_id and task_id in backtest_tasks:
         engine = backtest_tasks[task_id]['engine']
         if engine:
             engine.resume()
-            socketio.emit('backtest_resumed', {'task_id': task_id})
+            socketio.emit('backtest_resumed', {'task_id': task_id}, room=client_id)
             print(f"[恢复] task_id={task_id}")
+
+@socketio.on('set_speed')
+def handle_set_speed(data):
+    task_id = data.get('task_id')
+    speed = data.get('speed', 100)
+    client_id = data.get('client_id', 'default')
+    if task_id and task_id in backtest_tasks:
+        engine = backtest_tasks[task_id]['engine']
+        if engine:
+            engine.set_speed(speed)
+            print(f"[速度设置] task_id={task_id}, speed={speed}")
+
+@socketio.on('stop_backtest')
+def handle_stop_backtest(data):
+    task_id = data.get('task_id')
+    client_id = data.get('client_id', 'default')
+    print(f"[停止] task_id={task_id}")
+    if task_id and task_id in backtest_tasks:
+        engine = backtest_tasks[task_id]['engine']
+        if engine:
+            engine.stop()
+            socketio.emit('backtest_stopped', {'task_id': task_id}, room=client_id)
+            print(f"[停止成功] task_id={task_id}")
 
 if __name__ == '__main__':
     print("=" * 50)

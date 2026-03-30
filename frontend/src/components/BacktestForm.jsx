@@ -19,9 +19,15 @@ const periods = [
   { value: 'monthly', label: '月线' },
 ]
 
-function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause, onResume }) {
+function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause, onResume, onStop }) {
   const [form] = Form.useForm()
   const [selectedStrategy, setSelectedStrategy] = useState('sma_cross')
+
+  const isRunning = loading && !paused
+  const canStart = !isRunning && !paused && status !== 'stopped'
+  const canPause = isRunning
+  const canResume = paused
+  const canStop = isRunning || paused
 
   const handleFinish = (values) => {
     const params = {}
@@ -45,7 +51,7 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
   const currentStrategyParams = strategies.find(s => s.value === selectedStrategy)?.params || []
 
   return (
-    <Card size="small" title="参数设置" style={{ height: '100%', overflow: 'auto' }}>
+    <Card size="small" title="参数设置" style={{ height: '100%', overflow: 'auto', width: '100%' }}>
       <Form
         form={form}
         layout="inline"
@@ -160,20 +166,6 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
           )}
         </div>
 
-        {paused ? (
-          <Button type="primary" onClick={onResume} block style={{ backgroundColor: '#52c41a' }}>
-            恢复回测
-          </Button>
-        ) : loading ? (
-          <Button type="primary" onClick={onPause} block style={{ backgroundColor: '#faad14' }}>
-            暂停回测
-          </Button>
-        ) : (
-          <Button type="primary" htmlType="submit" loading={loading} block>
-            开始回测
-          </Button>
-        )}
-
         {(loading || status === 'completed') && (
           <Progress
             percent={status === 'completed' ? 100 : progress}
@@ -184,6 +176,22 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
           />
         )}
       </Form>
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <Button type="primary" htmlType="submit" disabled={!canStart} style={{ flex: 1 }} onClick={() => form.submit()}>
+          开始
+        </Button>
+        <Button
+          type="primary"
+          onClick={paused ? onResume : onPause}
+          disabled={paused ? !canResume : !canPause}
+          style={{ flex: 1, backgroundColor: paused ? '#52c41a' : '#faad14' }}
+        >
+          {paused ? '恢复' : '暂停'}
+        </Button>
+        <Button danger onClick={onStop} disabled={!canStop} style={{ flex: 1 }}>
+          停止
+        </Button>
+      </div>
     </Card>
   )
 }

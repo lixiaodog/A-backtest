@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Layout, Typography, message, Row, Col } from 'antd'
+import { Layout, Typography, message, Row, Col, Slider } from 'antd'
 import { io } from 'socket.io-client'
 import axios from 'axios'
 import BacktestForm from './components/BacktestForm'
@@ -22,6 +22,7 @@ function App() {
   const [trades, setTrades] = useState([])
   const [logs, setLogs] = useState([])
   const [socket, setSocket] = useState(null)
+  const [socketId, setSocketId] = useState(null)
   const [analysis, setAnalysis] = useState(null)
   const [currentStock, setCurrentStock] = useState('')
   const [liveChartData, setLiveChartData] = useState([])
@@ -30,7 +31,9 @@ function App() {
   const [liveEquity, setLiveEquity] = useState([])
   const [liveStats, setLiveStats] = useState(null)
   const [totalBars, setTotalBars] = useState(100)
+  const [backtestKey, setBacktestKey] = useState(0)
   const totalBarsRef = useRef(100)
+  const [speed, setSpeed] = useState(100)
 
   useEffect(() => {
     const newSocket = io('http://localhost:5000', {
@@ -38,7 +41,8 @@ function App() {
     })
 
     newSocket.on('connect', () => {
-      console.log('Connected to WebSocket')
+      console.log('Connected to WebSocket, id:', newSocket.id)
+      setSocketId(newSocket.id)
       setLogs(prev => [...prev, '[WS] Connected to server'])
     })
 
@@ -66,14 +70,8 @@ function App() {
         setLoading(false)
         setProgress(100)
         setResult(data.result)
-        if (data.result?.chart_data) {
-          setChartData(data.result.chart_data)
-        }
-        if (data.result?.trades) {
-          setTrades(data.result.trades)
-        }
         if (data.result?.analysis) {
-          setAnalysis(data.result.analysis)
+          setAnalysis(prev => ({ ...prev, ...data.result.analysis, chart_image_url: data.result.analysis?.chart_image_url }))
         }
         setLogs(prev => [...prev, '[OK] Backtest completed'])
         message.success('回测完成!')
@@ -88,11 +86,7 @@ function App() {
 
     newSocket.on('backtest_chart', (data) => {
       if (data.type === 'chart_data' && data.bar) {
-        setLiveChartData(prev => {
-          const newData = [...prev, data.bar]
-          if (newData.length > 500) newData.shift()
-          return newData
-        })
+        setLiveChartData(prev => [...prev, data.bar])
         if (data.bar_index % 20 === 0) {
           const pct = Math.round((data.bar_index / totalBarsRef.current) * 100)
           setProgress(Math.min(99, pct))
@@ -152,6 +146,13 @@ function App() {
       setLogs(prev => [...prev, `[RESUMED] 回测已恢复`])
     })
 
+    newSocket.on('backtest_stopped', (data) => {
+      setLoading(false)
+      setStatus('stopped')
+      setLogs(prev => [...prev, `[STOPPED] 回测已停止`])
+      message.info('回测已停止')
+    })
+
     setSocket(newSocket)
 
     return () => {
@@ -161,13 +162,19 @@ function App() {
 
   const handlePause = () => {
     if (socket && taskId) {
-      socket.emit('pause_backtest', { task_id: taskId })
+      socket.emit('pause_backtest', { task_id: taskId, client_id: socketId })
+    }
+  }
+
+  const handleStop = () => {
+    if (socket && taskId) {
+      socket.emit('stop_backtest', { task_id: taskId, client_id: socketId })
     }
   }
 
   const handleResume = () => {
     if (socket && taskId) {
-      socket.emit('resume_backtest', { task_id: taskId })
+      socket.emit('resume_backtest', { task_id: taskId, client_id: socketId })
     }
   }
 
@@ -179,6 +186,7 @@ function App() {
     setPaused(false)
     setTotalBars(100)
     totalBarsRef.current = 100
+    setBacktestKey(prev => prev + 1)
     setMessage('')
     setResult(null)
     setChartData([])
@@ -192,11 +200,16 @@ function App() {
     setCurrentStock(values.stock)
 
     try {
-      const response = await axios.post('http://localhost:5000/api/backtest', values)
+      const submitData = {
+        ...values,
+        client_id: socketId,
+        speed: speed
+      }
+      const response = await axios.post('http://localhost:5000/api/backtest', submitData)
       setTaskId(response.data.task_id)
       setStatus('fetching_data')
       setMessage('正在连接回测服务...')
-      setLogs(prev => [...prev, '[INFO] Connected to backtest service'])
+      setLogs(prev => [...prev, `[INFO] Connected to backtest service, client_id=${socketId}`])
     } catch (error) {
       setLoading(false)
       setLogs(prev => [...prev, `[ERROR] ${error.message}`])
@@ -213,7 +226,33 @@ function App() {
         <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
           <Col span={17} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
             <div style={{ height: 360, background: '#1a1a2e', borderRadius: 4, position: 'relative' }}>
-              <TradeViewChart data={chartData} trades={trades} result={result} stock={currentStock} liveData={liveChartData} liveSignals={liveSignals} />
+              <TradeViewChart
+                key={backtestKey}
+                data={chartData}
+                trades={trades}
+                result={result}
+                stock={currentStock}
+                liveData={liveChartData}
+                liveSignals={liveSignals}
+                speedControl={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#888', fontSize: 12 }}>速度:</span>
+                    <Slider
+                      style={{ width: 120 }}
+                      min={1}
+                      max={100}
+                      value={speed}
+                      onChange={(value) => {
+                        setSpeed(value)
+                        if (socket && taskId) {
+                          socket.emit('set_speed', { task_id: taskId, speed: value, client_id: socketId })
+                        }
+                      }}
+                    />
+                    <span style={{ color: '#888', fontSize: 12, width: 40 }}>{speed === 100 ? '不限速' : `${speed}%`}</span>
+                  </div>
+                }
+              />
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <TradeHistory trades={trades} analysis={analysis} liveEquity={liveEquity} liveStats={liveStats} liveSignals={liveSignals} liveTrades={liveTrades} />
@@ -221,7 +260,7 @@ function App() {
           </Col>
           <Col span={7} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
             <div style={{ flex: '0 0 280px' }}>
-              <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} />
+              <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} />
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <LogOutput logs={logs} />

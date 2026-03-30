@@ -14,16 +14,24 @@ from matplotlib.figure import Figure
 
 class RealtimeChartObserver(bt.Observer):
     lines = ('value',)
-    params = (('socketio', None), ('task_id', None), ('emit_interval', 1), ('engine', None))
+    params = (('socketio', None), ('task_id', None), ('client_id', None), ('emit_interval', 1), ('engine', None))
 
     def __init__(self):
         self._bar_count = 0
 
     def next(self):
+        if self.params.engine and self.params.engine._stopped:
+            self._owner.env.runstop()
+            return
         while self.params.engine and self.params.engine._paused:
             self.params.engine._pause_event.wait()
         self._bar_count += 1
-        time.sleep(0.02)
+        if self.params.engine and hasattr(self.params.engine, '_speed'):
+            speed = self.params.engine._speed
+            if speed < 100:
+                ratio = (100 - speed) / 100
+                delay = ratio * ratio * 3
+                time.sleep(delay)
         self.lines.value[0] = self._owner.broker.getvalue()
         if self.params.socketio and self._bar_count % self.params.emit_interval == 0:
             bar_data = {
@@ -41,10 +49,10 @@ class RealtimeChartObserver(bt.Observer):
                 'bar_index': self._bar_count
             }
             print(f"[实时图表] bar_index={self._bar_count}, close={self.data.close[0]:.2f}")
-            self.params.socketio.emit('backtest_chart', bar_data)
+            self.params.socketio.emit('backtest_chart', bar_data, room=self.params.client_id)
 
 class RealtimeSignalAnalyzer(bt.Analyzer):
-    params = (('socketio', None), ('task_id', None), ('emit_interval', 10))
+    params = (('socketio', None), ('task_id', None), ('client_id', None), ('emit_interval', 10))
 
     def __init__(self):
         self._trade_count = 0
@@ -66,10 +74,10 @@ class RealtimeSignalAnalyzer(bt.Analyzer):
                 }
             }
             print(f"[实时信号] {'买入' if order.isbuy() else '卖出'} bar_index={len(strategy) - 1}, price={order.executed.price:.2f}, size={order.executed.size}, value={order.executed.value:.2f}, comm={order.executed.comm:.2f}")
-            self.params.socketio.emit('backtest_signal', signal_data)
+            self.params.socketio.emit('backtest_signal', signal_data, room=self.params.client_id)
 
 class RealtimeStatsAnalyzer(bt.Analyzer):
-    params = (('socketio', None), ('task_id', None), ('emit_interval', 10), ('cash', 1000000))
+    params = (('socketio', None), ('task_id', None), ('client_id', None), ('emit_interval', 10), ('cash', 1000000))
 
     def __init__(self):
         self._bar_count = 0
@@ -144,7 +152,7 @@ class RealtimeStatsAnalyzer(bt.Analyzer):
             'bar_index': self._bar_count
         }
         print(f"[实时统计] bar_index={self._bar_count}, won={self._won_trades}, lost={self._lost_trades}, trades={len(trades)}")
-        self.params.socketio.emit('backtest_stats', stats_data)
+        self.params.socketio.emit('backtest_stats', stats_data, room=self.params.client_id)
 
 class AStockCommission:
     params = (
@@ -177,13 +185,17 @@ class AStockBacktestEngine:
         self._analyzers = {}
         self._socketio = None
         self._task_id = None
+        self._client_id = None
         self._paused = False
         self._pause_event = threading.Event()
         self._pause_event.set()
+        self._speed = 100
+        self._stopped = False
 
-    def set_socketio(self, socketio, task_id):
+    def set_socketio(self, socketio, task_id, client_id=None):
         self._socketio = socketio
         self._task_id = task_id
+        self._client_id = client_id
 
     def pause(self):
         self._paused = True
@@ -195,6 +207,15 @@ class AStockBacktestEngine:
 
     def is_paused(self):
         return self._paused
+
+    def stop(self):
+        self._stopped = True
+
+    def is_stopped(self):
+        return self._stopped
+
+    def set_speed(self, speed):
+        self._speed = speed
 
     def add_data(self, datafeed):
         self.cerebro.adddata(datafeed)
@@ -214,18 +235,21 @@ class AStockBacktestEngine:
                 RealtimeChartObserver,
                 socketio=self._socketio,
                 task_id=self._task_id,
+                client_id=self._client_id,
                 emit_interval=1,
                 engine=self
             )
             self.cerebro.addanalyzer(
                 RealtimeSignalAnalyzer,
                 socketio=self._socketio,
-                task_id=self._task_id
+                task_id=self._task_id,
+                client_id=self._client_id
             )
             self.cerebro.addanalyzer(
                 RealtimeStatsAnalyzer,
                 socketio=self._socketio,
                 task_id=self._task_id,
+                client_id=self._client_id,
                 cash=self.initial_cash
             )
 

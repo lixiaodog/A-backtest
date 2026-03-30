@@ -1,13 +1,13 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createChart } from 'lightweight-charts'
 import { Card, Tag } from 'antd'
 
-function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, style }) {
+function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, speedControl, style }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
   const candlestickSeriesRef = useRef(null)
   const volumeSeriesRef = useRef(null)
-  const lastSignalCountRef = useRef(0)
+  const [markers, setMarkers] = useState([])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -90,11 +90,11 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
     volumeSeriesRef.current.setData(volumeData)
     chartRef.current.timeScale().fitContent()
 
-    const markers = []
+    const initialMarkers = []
     trades?.forEach(trade => {
       let markerTime = trade.date
       if (markerTime) {
-        markers.push({
+        initialMarkers.push({
           time: markerTime,
           position: trade.type === 'buy' ? 'belowBar' : 'aboveBar',
           color: trade.type === 'buy' ? '#FF00FF' : '#00FF00',
@@ -104,8 +104,10 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
       }
     })
 
-    if (markers.length > 0) {
-      candlestickSeriesRef.current.setMarkers(markers)
+    setMarkers(initialMarkers)
+
+    if (initialMarkers.length > 0) {
+      candlestickSeriesRef.current.setMarkers(initialMarkers)
     }
   }, [data, trades])
 
@@ -139,12 +141,11 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
   useEffect(() => {
     if (!candlestickSeriesRef.current || !liveSignals) return
     if (data && data.length > 0) return
-    if (liveSignals.length === lastSignalCountRef.current) return
 
-    const newSignals = liveSignals.slice(lastSignalCountRef.current)
-    lastSignalCountRef.current = liveSignals.length
+    const newSignals = liveSignals.slice(markers.length)
+    if (newSignals.length === 0) return
 
-    const markers = newSignals.map(signal => ({
+    const newMarkers = newSignals.map(signal => ({
       time: signal.time,
       position: signal.trade_type === 'buy' ? 'belowBar' : 'aboveBar',
       color: signal.trade_type === 'buy' ? '#FF00FF' : '#00FF00',
@@ -152,12 +153,15 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
       text: signal.trade_type === 'buy' ? '买入' : '卖出',
     }))
 
+    const updatedMarkers = [...markers, ...newMarkers]
+    setMarkers(updatedMarkers)
+
     try {
-      candlestickSeriesRef.current.setMarkers(markers)
+      candlestickSeriesRef.current.setMarkers(updatedMarkers)
     } catch (e) {
       console.log('Set markers error:', e)
     }
-  }, [liveSignals, data])
+  }, [liveSignals, data, markers])
 
   const renderResultTags = () => {
     if (!result) return null
@@ -176,7 +180,7 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, st
   }
 
   return (
-    <Card size="small" title="K线图表" extra={renderResultTags()} style={{ ...style, height: '100%' }} styles={{ body: { height: 'calc(100% - 57px)', padding: 0 } }}>
+    <Card size="small" title="K线图表" extra={<div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>{renderResultTags()}{speedControl}</div>} style={{ ...style, height: '100%' }} styles={{ body: { height: 'calc(100% - 57px)', padding: 0 } }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
     </Card>
   )
