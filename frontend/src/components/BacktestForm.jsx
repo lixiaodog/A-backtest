@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Form, Input, DatePicker, Select, Button, Card, InputNumber, Progress } from 'antd'
+import { Form, Input, DatePicker, Select, Button, Card, InputNumber, Progress, Drawer, Slider, Switch } from 'antd'
+import { SettingOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 const periods = [
@@ -18,6 +19,11 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
   const [selectedStrategy, setSelectedStrategy] = useState('')
   const [strategyParams, setStrategyParams] = useState([])
   const [formReady, setFormReady] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [commission, setCommission] = useState(0.1)
+  const [slippage, setSlippage] = useState(0.01)
+  const [stampDuty, setStampDuty] = useState(0.05)
+  const [stampDutyMode, setStampDutyMode] = useState('sell')
 
   useEffect(() => {
     if (strategies.length > 0 && !selectedStrategy) {
@@ -31,7 +37,13 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
     const strategy = strategies.find(s => s.id === selectedStrategy)
     if (strategy) {
       setStrategyParams(strategy.params || [])
-      const newInitialValues = { period: 'daily', cash: 1000000, stake: 100 }
+      // 获取当前表单值，保留用户已选择的周期
+      const currentValues = form.getFieldsValue()
+      const newInitialValues = {
+        period: currentValues.period || 'daily',
+        cash: currentValues.cash || 1000000,
+        stake: currentValues.stake || 100
+      }
       strategy.params.forEach(p => {
         newInitialValues[p.name] = p.default
       })
@@ -62,6 +74,9 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
       params,
       cash: values.cash || 1000000,
       stake: values.stake || 100,
+      commission: commission / 100,
+      slippage: slippage / 100,
+      stamp_duty: stampDuty / 100,
     })
   }
 
@@ -74,7 +89,59 @@ function BacktestForm({ onSubmit, loading, progress = 0, status, paused, onPause
   }
 
   return (
-    <Card size="small" title="参数设置" style={{ height: '100%', overflow: 'auto', width: '100%' }}>
+    <Card
+      size="small"
+      title="参数设置"
+      extra={<SettingOutlined style={{ cursor: 'pointer', fontSize: 16 }} onClick={() => setDrawerOpen(true)} />}
+      style={{ height: '100%', overflow: 'auto', width: '100%' }}
+    >
+      <Drawer
+        title="高级配置"
+        placement="right"
+        onClose={() => setDrawerOpen(false)}
+        open={drawerOpen}
+        width={300}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>手续费 (%)</div>
+          <Slider
+            min={0}
+            max={0.5}
+            step={0.01}
+            value={commission}
+            onChange={setCommission}
+            marks={{ 0: '0%', 0.1: '0.1%', 0.25: '0.25%', 0.5: '0.5%' }}
+          />
+          <div style={{ textAlign: 'center', color: '#888' }}>{commission}%</div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>滑点 (%)</div>
+          <Slider
+            min={0}
+            max={0.1}
+            step={0.001}
+            value={slippage}
+            onChange={setSlippage}
+            marks={{ 0: '0%', 0.01: '0.01%', 0.05: '0.05%', 0.1: '0.1%' }}
+          />
+          <div style={{ textAlign: 'center', color: '#888' }}>{slippage}%</div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>印花税 - 卖出时收取 (%)</div>
+          <Slider
+            min={0}
+            max={0.2}
+            step={0.01}
+            value={stampDuty}
+            onChange={setStampDuty}
+            marks={{ 0: '0%', 0.05: '0.05%', 0.1: '0.1%', 0.2: '0.2%' }}
+          />
+          <div style={{ textAlign: 'center', color: '#888' }}>{stampDuty}%</div>
+        </div>
+      </Drawer>
+
       <Form
         form={form}
         layout="inline"

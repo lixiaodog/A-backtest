@@ -77,6 +77,9 @@ function App() {
         setLoading(false)
         setProgress(100)
         setResult(data.result)
+        if (data.result?.trades && data.result.trades.length > 0) {
+          setTrades(data.result.trades)
+        }
         if (data.result?.analysis) {
           setAnalysis(prev => ({ ...prev, ...data.result.analysis, chart_image_url: data.result.analysis?.chart_image_url }))
         }

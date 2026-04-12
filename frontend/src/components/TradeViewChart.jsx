@@ -9,6 +9,8 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, sp
   const volumeSeriesRef = useRef(null)
   const [markers, setMarkers] = useState([])
 
+  const tradeCount = trades?.length > 0 ? trades.length : (liveSignals?.length || 0)
+
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -67,6 +69,8 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, sp
     if (!candlestickSeriesRef.current) return
 
     if (!data || data.length === 0) {
+      // 如果有实时数据，不要清空图表
+      if (liveData && liveData.length > 0) return
       candlestickSeriesRef.current.setData([])
       volumeSeriesRef.current.setData([])
       return
@@ -168,7 +172,7 @@ function TradeViewChart({ data, trades, result, stock, liveData, liveSignals, sp
     return (
       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
         <span style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>{stock || '600519'}</span>
-        <Tag color="blue">成交 {trades?.length || 0} 笔</Tag>
+        <Tag color="blue">成交 {tradeCount} 笔</Tag>
         <Tag color={result.return_rate >= 0 ? 'green' : 'red'}>
           最终 ¥{result.final_cash?.toFixed(0) || '0'}
         </Tag>

@@ -163,6 +163,7 @@ def submit_backtest():
     data = request.json
     task_id = str(uuid.uuid4())
     client_id = data.get('client_id', 'default')
+    print(f"[回测请求] task_id={task_id}, params={data}")
 
     task = {
         'id': task_id,
@@ -228,6 +229,13 @@ def run_backtest(task_id, params, client_id='default'):
         df = get_astock_hist_data(stock, start_date, end_date, period)
         total_bars = len(df)
 
+        if total_bars < 50:
+            socketio.emit('backtest_error', {
+                'task_id': task_id,
+                'error': f'数据不足，至少需要50条数据，当前只有 {total_bars} 条'
+            }, room=client_id)
+            return
+
         socketio.emit('progress', {
             'task_id': task_id,
             'status': 'data_loaded',
@@ -238,7 +246,10 @@ def run_backtest(task_id, params, client_id='default'):
         datafeed = AStockData(dataname=df)
         engine = AStockBacktestEngine(
             initial_cash=params.get('cash', 1000000),
-            stake=params.get('stake', 100)
+            stake=params.get('stake', 100),
+            commission=params.get('commission', 0.001),
+            slippage=params.get('slippage', 0.0001),
+            stamp_duty=params.get('stamp_duty', 0.0005)
         )
         engine.set_socketio(socketio, task_id, client_id)
         tasks[task_id]['engine'] = engine

@@ -29,8 +29,11 @@ class RealtimeChartObserver(bt.Observer):
         if self.params.engine and hasattr(self.params.engine, '_speed'):
             speed = self.params.engine._speed
             if speed < 100:
+                # 使用凸函数实现非线性速度控制
+                # 低速度时敏感（小调整大变化），高速度时不敏感（大调整小变化）
+                # speed=0时delay=1秒，speed=100时delay≈0
                 ratio = (100 - speed) / 100
-                delay = ratio * ratio * 3
+                delay = 1.0 * (ratio ** 4)
                 time.sleep(delay)
         self.lines.value[0] = self._owner.broker.getvalue()
         if self.params.socketio and self._bar_count % self.params.emit_interval == 0:
@@ -174,11 +177,13 @@ class AStockCommission:
             return abs(size) * price * self._commission
 
 class AStockBacktestEngine:
-    def __init__(self, initial_cash=1000000, commission_pct=0.0003, stake=100):
+    def __init__(self, initial_cash=1000000, commission=0.001, slippage=0.0001, stamp_duty=0.0005, stake=100):
         self.cerebro = bt.Cerebro()
         self.cerebro.broker.setcash(initial_cash)
-        self.cerebro.broker.setcommission(commission_pct)
+        total_commission = commission + stamp_duty
+        self.cerebro.broker.setcommission(commission=total_commission, stocklike=True)
         self.cerebro.addsizer(bt.sizers.FixedSize, stake=stake)
+        self._slippage = slippage
 
         self.initial_cash = initial_cash
         self.results = None
@@ -287,19 +292,37 @@ class AStockBacktestEngine:
             })
 
         trade_analysis = self._analyzers.get('TradeAnalyzer', None)
+        realtime_stats = self._analyzers.get('RealtimeStatsAnalyzer', None)
 
         stats = {
             'final_cash': self.cerebro.broker.getvalue(),
             'total_return': self.cerebro.broker.getvalue() - self.initial_cash,
             'return_rate': ((self.cerebro.broker.getvalue() / self.initial_cash) - 1) * 100 if self.initial_cash > 0 else 0,
+            'total_trades': 0,
+            'closed_trades': 0,
+            'won_trades': 0,
+            'lost_trades': 0,
         }
+
+        if realtime_stats:
+            stats['won_trades'] = getattr(realtime_stats, '_won_trades', 0)
+            stats['lost_trades'] = getattr(realtime_stats, '_lost_trades', 0)
+            stats['total_trades'] = stats['won_trades'] + stats['lost_trades']
+            stats['closed_trades'] = stats['total_trades']
 
         if trade_analysis:
             ta = trade_analysis.get_analysis()
-            stats['total_trades'] = ta.get('total', {}).get('total', 0) or 0
-            stats['closed_trades'] = ta.get('total', {}).get('closed', 0) or 0
-            stats['won_trades'] = ta.get('won', {}).get('total', 0) or 0
-            stats['lost_trades'] = ta.get('lost', {}).get('total', 0) or 0
+            if ta:
+                total = ta.get('total', {})
+                if total:
+                    stats['total_trades'] = total.get('total', stats['total_trades']) or stats['total_trades']
+                    stats['closed_trades'] = total.get('closed', stats['closed_trades']) or stats['closed_trades']
+                won = ta.get('won', {})
+                if won:
+                    stats['won_trades'] = won.get('total', stats['won_trades']) or stats['won_trades']
+                lost = ta.get('lost', {})
+                if lost:
+                    stats['lost_trades'] = lost.get('total', stats['lost_trades']) or stats['lost_trades']
 
         return {
             'equity_data': equity_data,

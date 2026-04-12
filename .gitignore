@@ -10,3 +10,8 @@ build/
 .DS_Store
 *.db
 results/
+data/*.csv
+data/*.pkl
+data/*.parquet
+.trae/
+*.log

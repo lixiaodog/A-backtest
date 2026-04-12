@@ -1,4 +1,4 @@
-import akshare as ak
+import tushare as ts
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from backtrader.feeds import PandasData
@@ -32,7 +32,17 @@ def load_from_cache(stock_code: str, period: str, start_date: str, end_date: str
 
         start_dt = pd.to_datetime(start_date)
         end_dt = pd.to_datetime(end_date)
+        
+        # 检查缓存数据是否覆盖请求的日期范围
+        cache_start = df.index.min()
+        cache_end = df.index.max()
+        
+        if cache_start > start_dt or cache_end < end_dt:
+            print(f'Cache data range [{cache_start.date()} ~ {cache_end.date()}] does not cover requested range [{start_dt.date()} ~ {end_dt.date()}], fetching new data')
+            return None
+        
         df = df[(df.index >= start_dt) & (df.index <= end_dt)]
+        print(f'Loaded {len(df)} rows from cache for {stock_code}_{period}')
         return df
     except Exception as e:
         print(f'Load from cache failed: {e}')
@@ -51,48 +61,35 @@ def get_astock_hist_data(stock_code: str, start_date: str, end_date: str, period
         print(f'Loaded {len(cached_df)} rows from cache for {stock_code}_{period}')
         return cached_df
 
-    period_map = {
-        'daily': 'daily',
-        'weekly': 'weekly',
-        'monthly': 'monthly',
+    tushare_code = f'{stock_code}'
+    start_str = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}'
+    end_str = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
+    
+    # 将 period 转换为 tushare 的 ktype
+    period_to_ktype = {
+        'daily': 'D',
+        'weekly': 'W',
+        'monthly': 'M',
+        '1min': '1',
+        '5min': '5',
+        '15min': '15',
+        '30min': '30',
+        '60min': '60',
     }
+    ktype = period_to_ktype.get(period, 'D')
+    
+    df = ts.get_k_data(code=tushare_code, start=start_str, end=end_str, ktype=ktype)
 
-    minute_periods = {'1min': '1', '5min': '5', '15min': '15', '30min': '30', '60min': '60'}
-
-    if period in minute_periods:
-        df = ak.stock_zh_a_hist_min_em(
-            symbol=stock_code,
-            period=minute_periods[period],
-            adjust="qfq"
-        )
-        df.rename(columns={
-            '时间': 'datetime',
-            '开盘': 'open',
-            '收盘': 'close',
-            '最高': 'high',
-            '最低': 'low',
-            '成交量': 'volume'
-        }, inplace=True)
-        df['datetime'] = pd.to_datetime(df['datetime']).dt.tz_localize('Asia/Shanghai')
-        df.set_index('datetime', inplace=True)
-        df.sort_index(inplace=True)
-        save_to_cache(df, stock_code, period)
-        start_dt = pd.to_datetime(start_date).tz_localize('Asia/Shanghai')
-        end_dt = pd.to_datetime(end_date).tz_localize('Asia/Shanghai')
-        df = df[(df.index >= start_dt) & (df.index <= end_dt)]
-        return df[['open', 'high', 'low', 'close', 'volume']]
-
-    ak_period = period_map.get(period, 'daily')
-    df = ak.stock_zh_a_hist(symbol=stock_code, period=ak_period,
-                            start_date=start_date, end_date=end_date, adjust="qfq")
+    if df is None or len(df) == 0:
+        raise Exception(f'获取数据失败: {stock_code}')
 
     df.rename(columns={
-        '日期': 'datetime',
-        '开盘': 'open',
-        '收盘': 'close',
-        '最高': 'high',
-        '最低': 'low',
-        '成交量': 'volume'
+        'date': 'datetime',
+        'open': 'open',
+        'close': 'close',
+        'high': 'high',
+        'low': 'low',
+        'volume': 'volume'
     }, inplace=True)
 
     df['datetime'] = pd.to_datetime(df['datetime'])
