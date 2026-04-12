@@ -22,27 +22,34 @@ def get_cache_path(stock_code: str, period: str) -> str:
     return os.path.join(DATA_DIR, f'{stock_code}_{period}.csv')
 
 def load_from_cache(stock_code: str, period: str, start_date: str, end_date: str) -> pd.DataFrame:
+    import time
+    load_start = time.time()
     cache_path = get_cache_path(stock_code, period)
     if not os.path.exists(cache_path):
+        print(f'[数据加载] 缓存文件不存在: {cache_path}')
         return None
 
     try:
+        print(f'[数据加载] 开始读取缓存: {cache_path}')
         df = pd.read_csv(cache_path, index_col='datetime', parse_dates=True)
+        print(f'[数据加载] CSV读取完成, 耗时: {time.time() - load_start:.3f}秒, 行数: {len(df)}')
         df.sort_index(inplace=True)
 
         start_dt = pd.to_datetime(start_date)
         end_dt = pd.to_datetime(end_date)
-        
+
         # 检查缓存数据是否覆盖请求的日期范围
         cache_start = df.index.min()
         cache_end = df.index.max()
-        
+
         if cache_start > start_dt or cache_end < end_dt:
-            print(f'Cache data range [{cache_start.date()} ~ {cache_end.date()}] does not cover requested range [{start_dt.date()} ~ {end_dt.date()}], fetching new data')
-            return None
-        
+            print(f'[数据加载] 缓存范围 [{cache_start.date()} ~ {cache_end.date()}] 部分覆盖请求范围 [{start_dt.date()} ~ {end_dt.date()}]，返回本地数据')
+            # 不过滤，直接返回所有缓存数据
+            print(f'[数据加载] 缓存加载完成, 总耗时: {time.time() - load_start:.3f}秒, 返回行数: {len(df)}')
+            return df
+
         df = df[(df.index >= start_dt) & (df.index <= end_dt)]
-        print(f'Loaded {len(df)} rows from cache for {stock_code}_{period}')
+        print(f'[数据加载] 缓存加载完成, 总耗时: {time.time() - load_start:.3f}秒, 返回行数: {len(df)}')
         return df
     except Exception as e:
         print(f'Load from cache failed: {e}')
@@ -53,6 +60,7 @@ def save_to_cache(df: pd.DataFrame, stock_code: str, period: str):
     df_local = df.copy()
     if df_local.index.tzinfo is not None:
         df_local.index = df_local.index.tz_localize(None)
+    df_local.index.name = 'datetime'
     df_local.to_csv(cache_path)
 
 def get_astock_hist_data(stock_code: str, start_date: str, end_date: str, period: str = 'daily') -> pd.DataFrame:
