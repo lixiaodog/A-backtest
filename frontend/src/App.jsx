@@ -6,6 +6,7 @@ import BacktestForm from './components/BacktestForm'
 import TradeViewChart from './components/TradeViewChart'
 import TradeHistory from './components/TradeHistory'
 import LogOutput from './components/LogOutput'
+import MLPanel from './components/MLPanel'
 
 const { Header, Content } = Layout
 const { Title } = Typography
@@ -271,6 +272,9 @@ function App() {
           <Col span={7} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
             <div style={{ flex: '0 0 280px' }}>
               <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} strategies={strategies} />
+            </div>
+            <div style={{ flex: '0 0 300px' }}>
+              <MLPanel />
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <LogOutput logs={logs} />

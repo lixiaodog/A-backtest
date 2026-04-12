@@ -208,6 +208,224 @@ def serve_chart(filename):
     results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results')
     return send_from_directory(results_dir, filename)
 
+@app.route('/api/ml/train', methods=['POST'])
+def ml_train():
+    try:
+        data = request.json
+        stock_code = data.get('stock_code') or data.get('stock')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        model_type = data.get('model_type', 'RandomForest')
+        features = data.get('features', [])
+        horizon = data.get('horizon', 5)
+        threshold = data.get('threshold', 0.02)
+
+        from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
+
+        data_loader = MLDataLoader()
+        feature_engineer = FeatureEngineer()
+        trainer = ModelTrainer()
+        registry = ModelRegistry()
+
+        existing = registry.find_existing_model(stock_code, start_date, end_date, model_type, features)
+        if existing:
+            return jsonify({
+                'status': 'existing',
+                'model': existing,
+                'message': '模型已存在，无需重复训练'
+            })
+
+        raw_data = data_loader.load_stock_data(stock_code, start_date, end_date)
+
+        X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
+
+        if len(X) < 50:
+            return jsonify({'error': '数据量太少，至少需要50条数据'}), 400
+
+        result = trainer.train_with_split(X, y, model_type)
+
+        filename = f'{model_type.lower()}_{stock_code}_{uuid.uuid4().hex[:8]}.pkl'
+        filepath = trainer.save_model(result['model'], filename)
+
+        model_info = registry.register_model(
+            stock_code=stock_code,
+            start_date=start_date,
+            end_date=end_date,
+            model_type=model_type,
+            features=features,
+            file_path=filepath,
+            metrics=result['test_metrics']
+        )
+
+        return jsonify({
+            'status': 'trained',
+            'model': model_info,
+            'metrics': result['test_metrics']
+        })
+
+    except FileNotFoundError as e:
+        return jsonify({'error': f'数据文件不存在: {str(e)}'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/train/incremental', methods=['POST'])
+def ml_train_incremental():
+    try:
+        data = request.json
+        base_model_id = data.get('base_model_id') or data.get('base_model')
+        new_start_date = data.get('new_start_date')
+        new_end_date = data.get('new_end_date')
+
+        from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
+
+        registry = ModelRegistry()
+        base_model_info = registry.get_model_by_id(base_model_id)
+        if not base_model_info:
+            return jsonify({'error': '基础模型不存在'}), 404
+
+        data_loader = MLDataLoader()
+        feature_engineer = FeatureEngineer()
+        trainer = ModelTrainer()
+
+        raw_data = data_loader.load_stock_data(
+            base_model_info['stock_code'],
+            new_start_date,
+            new_end_date
+        )
+
+        X, y = feature_engineer.prepare_data(
+            raw_data,
+            base_model_info['features'],
+            5,
+            0.02
+        )
+
+        new_model = trainer.train_incremental(
+            base_model_info['file_path'],
+            X, y,
+            base_model_info['model_type']
+        )
+
+        filename = f'{base_model_info["model_type"].lower()}_{base_model_info["stock_code"]}_inc_{uuid.uuid4().hex[:8]}.pkl'
+        filepath = trainer.save_model(new_model, filename)
+
+        new_incremental_info = {
+            'start_date': new_start_date,
+            'end_date': new_end_date,
+            'trained_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        model_info = registry.register_model(
+            stock_code=base_model_info['stock_code'],
+            start_date=base_model_info['start_date'],
+            end_date=new_end_date,
+            model_type=base_model_info['model_type'],
+            features=base_model_info['features'],
+            file_path=filepath,
+            metrics={},
+            parent_model_id=base_model_id,
+            incremental_data=new_incremental_info
+        )
+
+        return jsonify({
+            'status': 'incremental_trained',
+            'model': model_info
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/predict', methods=['POST'])
+def ml_predict():
+    try:
+        data = request.json
+        stock_code = data.get('stock_code') or data.get('stock')
+        model_id = data.get('model_id')
+
+        from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
+
+        registry = ModelRegistry()
+        model_info = registry.get_model_by_id(model_id)
+        if not model_info:
+            return jsonify({'error': '模型不存在'}), 404
+
+        trainer = ModelTrainer()
+        model = trainer.load_model(model_info['file_path'])
+
+        feature_engineer = FeatureEngineer()
+
+        data_loader = MLDataLoader()
+        raw_data = data_loader.load_stock_data(stock_code)
+
+        from ml.predictors import Predictor
+        predictor = Predictor(model, feature_engineer)
+        result = predictor.predict(raw_data, model_info['features'])
+
+        if result is None:
+            return jsonify({'error': '无法生成预测，数据不足'}), 400
+
+        return jsonify({
+            'stock_code': stock_code,
+            'model_id': model_id,
+            'prediction': result
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/models', methods=['GET'])
+def ml_get_models():
+    try:
+        stock_code = request.args.get('stock')
+        from ml import ModelRegistry
+        registry = ModelRegistry()
+
+        if stock_code:
+            models = registry.get_models_by_stock(stock_code)
+        else:
+            models = registry.get_all_models()
+
+        return jsonify(models)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/models/<model_id>', methods=['DELETE'])
+def ml_delete_model(model_id):
+    try:
+        from ml import ModelRegistry
+        registry = ModelRegistry()
+        success = registry.delete_model(model_id)
+
+        if success:
+            return jsonify({'status': 'deleted', 'model_id': model_id})
+        else:
+            return jsonify({'error': '模型不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/features', methods=['GET'])
+def ml_get_features():
+    try:
+        from ml import FeatureEngineer
+        feature_engineer = FeatureEngineer()
+        features = feature_engineer.get_available_features()
+        return jsonify(features)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/stocks', methods=['GET'])
+def ml_get_stocks():
+    try:
+        from ml import MLDataLoader
+        loader = MLDataLoader()
+        stocks = loader.get_available_stocks()
+        return jsonify(stocks)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 def run_backtest(task_id, params, client_id='default'):
     task = tasks[task_id]
     task['status'] = 'running'
