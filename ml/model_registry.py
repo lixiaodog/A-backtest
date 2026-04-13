@@ -26,7 +26,8 @@ class ModelRegistry:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     def register_model(self, stock_code, start_date, end_date, model_type, features,
-                      file_path, metrics, parent_model_id=None, incremental_data=None):
+                      file_path, metrics, parent_model_id=None, incremental_data=None,
+                      scaler_params=None):
         data = self._load_registry()
 
         model_info = {
@@ -41,7 +42,8 @@ class ModelRegistry:
             'metrics': metrics,
             'file_path': file_path,
             'parent_model_id': parent_model_id,
-            'incremental_data': incremental_data or []
+            'incremental_data': incremental_data or [],
+            'scaler_params': scaler_params
         }
 
         data['models'].append(model_info)

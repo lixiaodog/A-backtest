@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 from .alpha191 import Alpha191
 
 
@@ -9,6 +10,8 @@ class FeatureEngineer:
         self._alpha191_features = [f'alpha_{i:03d}' for i in range(1, 192)]
         self._technical_features = self._get_technical_features()
         self.available_features = self._technical_features.copy()
+        self._scaler = StandardScaler()
+        self._scaler_fitted = False
 
     def _get_technical_features(self):
         return {
@@ -55,10 +58,24 @@ class FeatureEngineer:
     def get_all_features(self):
         return list(self.available_features.keys())
 
-    def calculate_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
-        if feature_names is None:
-            feature_names = self.get_available_features()
+    def get_scaler_params(self):
+        if not self._scaler_fitted:
+            return None
+        return {
+            'mean': self._scaler.mean_.tolist() if hasattr(self._scaler, 'mean_') else None,
+            'scale': self._scaler.scale_.tolist() if hasattr(self._scaler, 'scale_') else None,
+            'n_features_in_': self._scaler.n_features_in_ if hasattr(self._scaler, 'n_features_in_') else None
+        }
 
+    def set_scaler_params(self, params):
+        if params is None:
+            return
+        self._scaler.mean_ = np.array(params['mean'])
+        self._scaler.scale_ = np.array(params['scale'])
+        self._scaler.n_features_in_ = params['n_features_in_']
+        self._scaler_fitted = True
+
+    def _compute_features(self, df: pd.DataFrame, feature_names: list) -> pd.DataFrame:
         result = pd.DataFrame(index=df.index)
         alpha_features = []
         technical_features = []
@@ -82,7 +99,37 @@ class FeatureEngineer:
         result = result.dropna()
         result = result.astype(np.float32)
         result = result.clip(-1e10, 1e10)
+
         return result
+
+    def fit_transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+        if feature_names is None:
+            feature_names = self.get_available_features()
+
+        result = self._compute_features(df, feature_names)
+
+        scaled_values = self._scaler.fit_transform(result)
+        self._scaler_fitted = True
+        result = pd.DataFrame(scaled_values, index=result.index, columns=result.columns)
+
+        return result
+
+    def transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+        if feature_names is None:
+            feature_names = self.get_available_features()
+
+        result = self._compute_features(df, feature_names)
+
+        if self._scaler_fitted:
+            scaled_values = self._scaler.transform(result)
+            result = pd.DataFrame(scaled_values, index=result.index, columns=result.columns)
+
+        return result
+
+    def calculate_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+        if self._scaler_fitted:
+            return self.transform(df, feature_names)
+        return self.fit_transform(df, feature_names)
 
     def generate_labels(self, df: pd.DataFrame, horizon: int = 5, threshold: float = 0.02) -> pd.Series:
         future_returns = df['close'].shift(-horizon) / df['close'] - 1
@@ -90,7 +137,7 @@ class FeatureEngineer:
         return labels
 
     def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02):
-        features = self.calculate_features(df, feature_names)
+        features = self.fit_transform(df, feature_names)
         labels = self.generate_labels(df, horizon, threshold)
 
         aligned_labels = labels.loc[features.index]

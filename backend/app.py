@@ -247,6 +247,8 @@ def ml_train():
         filename = f'{model_type.lower()}_{stock_code}_{uuid.uuid4().hex[:8]}.pkl'
         filepath = trainer.save_model(result['model'], filename)
 
+        scaler_params = feature_engineer.get_scaler_params()
+
         model_info = registry.register_model(
             stock_code=stock_code,
             start_date=start_date,
@@ -254,7 +256,8 @@ def ml_train():
             model_type=model_type,
             features=features,
             file_path=filepath,
-            metrics=result['test_metrics']
+            metrics=result['test_metrics'],
+            scaler_params=scaler_params
         )
 
         return jsonify({
@@ -355,6 +358,8 @@ def ml_predict():
         model = trainer.load_model(model_info['file_path'])
 
         feature_engineer = FeatureEngineer()
+        if model_info.get('scaler_params'):
+            feature_engineer.set_scaler_params(model_info['scaler_params'])
 
         data_loader = MLDataLoader()
         raw_data = data_loader.load_stock_data(stock_code)
