@@ -411,7 +411,13 @@ def ml_get_features():
     try:
         from ml import FeatureEngineer
         feature_engineer = FeatureEngineer()
-        features = feature_engineer.get_available_features()
+        feature_type = request.args.get('type', 'all')
+        if feature_type == 'alpha191':
+            features = feature_engineer.get_alpha191_features()
+        elif feature_type == 'technical':
+            features = feature_engineer.get_technical_features()
+        else:
+            features = feature_engineer.get_technical_features() + feature_engineer.get_alpha191_features()
         return jsonify(features)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -1,12 +1,16 @@
 import pandas as pd
 import numpy as np
+from .alpha191 import Alpha191
 
 
 class FeatureEngineer:
     def __init__(self):
-        self.available_features = self._get_feature_definitions()
+        self._alpha191 = Alpha191()
+        self._alpha191_features = [f'alpha_{i:03d}' for i in range(1, 192)]
+        self._technical_features = self._get_technical_features()
+        self.available_features = self._technical_features.copy()
 
-    def _get_feature_definitions(self):
+    def _get_technical_features(self):
         return {
             'ma5': self._ma(5),
             'ma10': self._ma(10),
@@ -42,15 +46,37 @@ class FeatureEngineer:
     def get_available_features(self):
         return list(self.available_features.keys())
 
+    def get_technical_features(self):
+        return list(self._technical_features.keys())
+
+    def get_alpha191_features(self):
+        return self._alpha191_features
+
+    def get_all_features(self):
+        return list(self.available_features.keys())
+
     def calculate_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
         if feature_names is None:
             feature_names = self.get_available_features()
 
         result = pd.DataFrame(index=df.index)
+        alpha_features = []
+        technical_features = []
 
         for name in feature_names:
-            if name in self.available_features:
-                result[name] = self.available_features[name](df)
+            if name in self._alpha191_features:
+                alpha_features.append(name)
+            elif name in self.available_features:
+                technical_features.append(name)
+
+        for name in technical_features:
+            result[name] = self.available_features[name](df)
+
+        if alpha_features:
+            alpha_df = self._alpha191.get_all_alphas(df)
+            for name in alpha_features:
+                if name in alpha_df.columns:
+                    result[name] = alpha_df[name]
 
         result = result.dropna()
         return result

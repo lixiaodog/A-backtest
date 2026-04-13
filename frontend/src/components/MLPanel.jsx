@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Form, Input, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message } from 'antd'
-import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined } from '@ant-design/icons'
-import dayjs from 'dayjs'
+import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, AutoComplete } from 'antd'
+import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
 function MLPanel() {
@@ -10,15 +9,18 @@ function MLPanel() {
   const [training, setTraining] = useState(false)
   const [progress, setProgress] = useState(0)
   const [models, setModels] = useState([])
-  const [features, setFeatures] = useState([])
+  const [technicalFeatures, setTechnicalFeatures] = useState([])
+  const [alphaFeatures, setAlphaFeatures] = useState([])
   const [selectedFeatures, setSelectedFeatures] = useState([])
+  const [featureType, setFeatureType] = useState('all')
   const [trainingLogs, setTrainingLogs] = useState([])
   const [predictionResult, setPredictionResult] = useState(null)
   const [form] = Form.useForm()
 
   useEffect(() => {
     loadModels()
-    loadFeatures()
+    loadTechnicalFeatures()
+    loadAlphaFeatures()
     loadStocks()
   }, [])
 
@@ -40,19 +42,34 @@ function MLPanel() {
     }
   }
 
-  const loadFeatures = async () => {
+  const loadTechnicalFeatures = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/ml/features')
-      const featureList = res.data || []
-      setFeatures(featureList)
-      if (featureList.length > 0 && selectedFeatures.length === 0) {
-        const defaultFeatures = featureList.slice(0, 20)
-        setSelectedFeatures(defaultFeatures)
-        form.setFieldsValue({ features: defaultFeatures })
-      }
+      const res = await axios.get('http://localhost:5000/api/ml/features?type=technical')
+      setTechnicalFeatures(res.data || [])
     } catch (err) {
-      console.error('Failed to load features:', err)
+      console.error('Failed to load technical features:', err)
     }
+  }
+
+  const loadAlphaFeatures = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/ml/features?type=alpha191')
+      setAlphaFeatures(res.data || [])
+    } catch (err) {
+      console.error('Failed to load alpha features:', err)
+    }
+  }
+
+  const getCurrentFeatures = () => {
+    if (featureType === 'technical') return technicalFeatures
+    if (featureType === 'alpha191') return alphaFeatures
+    return [...technicalFeatures, ...alphaFeatures]
+  }
+
+  const handleFeatureTypeChange = (type) => {
+    setFeatureType(type)
+    setSelectedFeatures([])
+    form.setFieldsValue({ features: [] })
   }
 
   const handleTrain = async (values) => {
@@ -198,11 +215,7 @@ function MLPanel() {
     return 'gray'
   }
 
-  const defaultFeatures = features.slice(0, 20)
-  if (selectedFeatures.length === 0 && features.length > 0) {
-    setSelectedFeatures(defaultFeatures)
-    form.setFieldsValue({ features: defaultFeatures })
-  }
+  const currentFeatures = getCurrentFeatures()
 
   return (
     <Card
@@ -214,15 +227,13 @@ function MLPanel() {
         <Tabs.TabPane tab="训练" key="1">
           <Form form={form} layout="vertical" onFinish={handleTrain}>
             <Space direction="vertical" style={{ width: '100%' }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
-                  <Select showSearch allowClear placeholder="选择股票">
-                    {stocks.map(s => (
-                      <Select.Option key={s} value={s}>{s}</Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              </div>
+              <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
+                <Select showSearch allowClear placeholder="选择股票">
+                  {stocks.map(s => (
+                    <Select.Option key={s} value={s}>{s}</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
 
               <div style={{ display: 'flex', gap: 8 }}>
                 <Form.Item name="startDate" label="开始" style={{ flex: 1, marginBottom: 0 }}>
@@ -233,15 +244,54 @@ function MLPanel() {
                 </Form.Item>
               </div>
 
-              <Form.Item name="features" label={`特征 (${selectedFeatures.length})`}>
-                <Checkbox.Group value={selectedFeatures} onChange={setSelectedFeatures}>
-                  <div style={{ maxHeight: 120, overflow: 'auto' }}>
-                    {features.map(f => (
-                      <Checkbox key={f} value={f} style={{ width: '45%' }}>{f}</Checkbox>
+              <div>
+                <div style={{ marginBottom: 8, color: '#888' }}>特征类型</div>
+                <Space>
+                  <Button.Group>
+                    <Button type={featureType === 'all' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('all')}>全部</Button>
+                    <Button type={featureType === 'technical' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('technical')}>技术指标</Button>
+                    <Button type={featureType === 'alpha191' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('alpha191')}>Alpha191</Button>
+                  </Button.Group>
+                  <span style={{ color: '#888', fontSize: 12 }}>已选: {selectedFeatures.length}</span>
+                </Space>
+              </div>
+
+              <Form.Item name="features" label={`特征 (${currentFeatures.length})`} style={{ marginBottom: 8 }}>
+                <Checkbox.Group value={selectedFeatures} onChange={(vals) => {
+                  setSelectedFeatures(vals)
+                  form.setFieldsValue({ features: vals })
+                }}>
+                  <div style={{ maxHeight: 150, overflow: 'auto', border: '1px solid #333', borderRadius: 4, padding: 8 }}>
+                    {currentFeatures.map(f => (
+                      <Checkbox key={f} value={f} style={{ width: '45%', marginLeft: 4 }}>{f}</Checkbox>
                     ))}
                   </div>
                 </Checkbox.Group>
               </Form.Item>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => {
+                    if (featureType === 'alpha191') {
+                      setSelectedFeatures(alphaFeatures.slice(0, 30))
+                      form.setFieldsValue({ features: alphaFeatures.slice(0, 30) })
+                    } else if (featureType === 'technical') {
+                      setSelectedFeatures(technicalFeatures)
+                      form.setFieldsValue({ features: technicalFeatures })
+                    } else {
+                      setSelectedFeatures([...technicalFeatures, ...alphaFeatures.slice(0, 30)])
+                      form.setFieldsValue({ features: [...technicalFeatures, ...alphaFeatures.slice(0, 30)] })
+                    }
+                  }}
+                >
+                  全选
+                </Button>
+                <Button type="link" size="small" onClick={() => { setSelectedFeatures([]); form.setFieldsValue({ features: [] }) }}>
+                  清空
+                </Button>
+              </div>
 
               {training && <Progress percent={progress} size="small" status="active" />}
 
@@ -282,11 +332,25 @@ function MLPanel() {
                 </Form.Item>
               </div>
 
-              <Form.Item name="features" label={`特征 (${selectedFeatures.length})`}>
-                <Checkbox.Group value={selectedFeatures} onChange={setSelectedFeatures}>
-                  <div style={{ maxHeight: 100, overflow: 'auto' }}>
-                    {features.map(f => (
-                      <Checkbox key={f} value={f} style={{ width: '45%' }}>{f}</Checkbox>
+              <div>
+                <div style={{ marginBottom: 8, color: '#888' }}>特征类型</div>
+                <Space>
+                  <Button.Group>
+                    <Button type={featureType === 'all' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('all')}>全部</Button>
+                    <Button type={featureType === 'technical' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('technical')}>技术指标</Button>
+                    <Button type={featureType === 'alpha191' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('alpha191')}>Alpha191</Button>
+                  </Button.Group>
+                </Space>
+              </div>
+
+              <Form.Item name="features" label={`特征 (${selectedFeatures.length})`} style={{ marginBottom: 8 }}>
+                <Checkbox.Group value={selectedFeatures} onChange={(vals) => {
+                  setSelectedFeatures(vals)
+                  form.setFieldsValue({ features: vals })
+                }}>
+                  <div style={{ maxHeight: 100, overflow: 'auto', border: '1px solid #333', borderRadius: 4, padding: 8 }}>
+                    {currentFeatures.map(f => (
+                      <Checkbox key={f} value={f} style={{ width: '45%', marginLeft: 4 }}>{f}</Checkbox>
                     ))}
                   </div>
                 </Checkbox.Group>
@@ -334,9 +398,9 @@ function MLPanel() {
                     <span style={{ color: '#fff' }}>置信度: {(predictionResult.confidence * 100).toFixed(1)}%</span>
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
-                    买入概率: {(predictionResult.probabilities?.buy || 0 * 100).toFixed(1)}% |
-                    卖出概率: {(predictionResult.probabilities?.sell || 0).toFixed(1)}% |
-                    持有概率: {(predictionResult.probabilities?.hold || 0).toFixed(1)}%
+                    买入: {(predictionResult.probabilities?.buy || 0 * 100).toFixed(1)}% |
+                    卖出: {(predictionResult.probabilities?.sell || 0).toFixed(1)}% |
+                    持有: {(predictionResult.probabilities?.hold || 0).toFixed(1)}%
                   </div>
                 </div>
               )}
@@ -380,6 +444,7 @@ function MLPanel() {
             scroll={{ y: 200 }}
             columns={[
               { title: '股票', dataIndex: 'stock', width: 80 },
+              { title: '特征数', dataIndex: 'feature_count', width: 60 },
               { title: '准确率', dataIndex: 'accuracy', width: 70, render: v => v ? (v * 100).toFixed(1) + '%' : '-' },
               { title: '训练时间', dataIndex: 'trained_at', width: 120, render: v => v?.slice(0, 19) },
               {
