@@ -220,6 +220,10 @@ def ml_train():
         features = data.get('features', [])
         horizon = data.get('horizon', 5)
         threshold = data.get('threshold', 0.02)
+        label_type = data.get('label_type', 'fixed')
+        vol_window = data.get('vol_window', 20)
+        lower_q = data.get('lower_q', 0.2)
+        upper_q = data.get('upper_q', 0.8)
 
         from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
 
@@ -238,7 +242,12 @@ def ml_train():
 
         raw_data = data_loader.load_stock_data(stock_code, start_date, end_date)
 
-        X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
+        if label_type == 'volatility':
+            X, y = feature_engineer.prepare_data_with_volatility(raw_data, features, horizon, vol_window, lower_q, upper_q)
+        elif label_type == 'multi':
+            X, y = feature_engineer.prepare_data_multi(raw_data, features, horizon, lower_q, upper_q)
+        else:
+            X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
 
         if len(X) < 50:
             return jsonify({'error': '数据量太少，至少需要50条数据'}), 400
@@ -262,7 +271,13 @@ def ml_train():
             features=features,
             file_path=filepath,
             metrics=result['test_metrics'],
-            scaler_params=scaler_params
+            scaler_params=scaler_params,
+            label_type=label_type,
+            horizon=horizon,
+            threshold=threshold,
+            vol_window=vol_window,
+            lower_q=lower_q,
+            upper_q=upper_q
         )
 
         return jsonify({
@@ -370,7 +385,8 @@ def ml_predict():
         raw_data = data_loader.load_stock_data(stock_code)
 
         from ml.predictors import Predictor
-        predictor = Predictor(model, feature_engineer)
+        label_type = model_info.get('label_type', 'fixed')
+        predictor = Predictor(model, feature_engineer, label_type)
         result = predictor.predict(raw_data, model_info['features'])
 
         if result is None:

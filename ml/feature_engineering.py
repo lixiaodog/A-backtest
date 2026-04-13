@@ -136,9 +136,65 @@ class FeatureEngineer:
         labels = pd.cut(future_returns, bins=[-np.inf, -threshold, threshold, np.inf], labels=[0, 1, 2])
         return labels
 
+    def generate_labels_by_volatility(self, df: pd.DataFrame, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8) -> pd.Series:
+        future_returns = df['close'].shift(-horizon) / df['close'] - 1
+        returns = df['close'].pct_change()
+
+        rolling_vol = returns.rolling(window=vol_window).std()
+        vol_rolling = rolling_vol.rolling(window=vol_window).mean()
+
+        lower_threshold = vol_rolling.quantile(lower_q)
+        upper_threshold = vol_rolling.quantile(upper_q)
+
+        labels = pd.Series(index=future_returns.index, dtype=int)
+        labels[future_returns < lower_threshold] = 0
+        labels[(future_returns >= lower_threshold) & (future_returns <= upper_threshold)] = 1
+        labels[future_returns > upper_threshold] = 2
+
+        return labels
+
+    def generate_labels_multi(self, df: pd.DataFrame, horizon: int = 5, lower_q: float = 0.1, mid_low_q: float = 0.3, mid_high_q: float = 0.7, upper_q: float = 0.9) -> pd.Series:
+        future_returns = df['close'].shift(-horizon) / df['close'] - 1
+
+        q_values = future_returns.quantile([lower_q, mid_low_q, mid_high_q, upper_q])
+        q1, q2, q3, q4 = q_values[lower_q], q_values[mid_low_q], q_values[mid_high_q], q_values[upper_q]
+
+        labels = pd.Series(index=future_returns.index, dtype=int)
+        labels[future_returns <= q1] = 0
+        labels[(future_returns > q1) & (future_returns <= q2)] = 1
+        labels[(future_returns > q2) & (future_returns <= q3)] = 2
+        labels[(future_returns > q3) & (future_returns <= q4)] = 3
+        labels[future_returns > q4] = 4
+
+        return labels
+
     def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02):
         features = self.fit_transform(df, feature_names)
         labels = self.generate_labels(df, horizon, threshold)
+
+        aligned_labels = labels.loc[features.index]
+
+        valid_mask = ~aligned_labels.isna()
+        X = features.loc[valid_mask]
+        y = aligned_labels.loc[valid_mask]
+
+        return X, y
+
+    def prepare_data_with_volatility(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8):
+        features = self.fit_transform(df, feature_names)
+        labels = self.generate_labels_by_volatility(df, horizon, vol_window, lower_q, upper_q)
+
+        aligned_labels = labels.loc[features.index]
+
+        valid_mask = ~aligned_labels.isna()
+        X = features.loc[valid_mask]
+        y = aligned_labels.loc[valid_mask]
+
+        return X, y
+
+    def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9):
+        features = self.fit_transform(df, feature_names)
+        labels = self.generate_labels_multi(df, horizon, lower_q, upper_q)
 
         aligned_labels = labels.loc[features.index]
 

@@ -13,5 +13,10 @@ results/
 data/*.csv
 data/*.pkl
 data/*.parquet
+models/*.pkl
+models/*.json
 .trae/
 *.log
+*.tmp
+fix_*.py
+test_*.py

@@ -27,7 +27,8 @@ class ModelRegistry:
 
     def register_model(self, stock_code, start_date, end_date, model_type, features,
                       file_path, metrics, parent_model_id=None, incremental_data=None,
-                      scaler_params=None, model_name=None):
+                      scaler_params=None, model_name=None, label_type='fixed',
+                      horizon=5, threshold=0.02, vol_window=20, lower_q=0.2, upper_q=0.8):
         data = self._load_registry()
 
         model_info = {
@@ -44,7 +45,13 @@ class ModelRegistry:
             'file_path': file_path,
             'parent_model_id': parent_model_id,
             'incremental_data': incremental_data or [],
-            'scaler_params': scaler_params
+            'scaler_params': scaler_params,
+            'label_type': label_type,
+            'horizon': horizon,
+            'threshold': threshold,
+            'vol_window': vol_window,
+            'lower_q': lower_q,
+            'upper_q': upper_q
         }
 
         data['models'].append(model_info)

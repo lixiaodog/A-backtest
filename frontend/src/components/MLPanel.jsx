@@ -13,6 +13,7 @@ function MLPanel() {
   const [alphaFeatures, setAlphaFeatures] = useState([])
   const [selectedFeatures, setSelectedFeatures] = useState([])
   const [featureType, setFeatureType] = useState('all')
+  const [modelType, setModelType] = useState('RandomForest')
   const [trainingLogs, setTrainingLogs] = useState([])
   const [predictionResult, setPredictionResult] = useState(null)
   const [form] = Form.useForm()
@@ -99,6 +100,12 @@ function MLPanel() {
         end_date: values.endDate ? values.endDate.format('YYYYMMDD') : '20260401',
         features: selectedFeatures,
         model_type: values.modelType || 'RandomForest',
+        horizon: values.horizon ? parseInt(values.horizon) : 5,
+        threshold: values.threshold ? parseFloat(values.threshold) / 100 : 0.02,
+        label_type: values.labelType || 'fixed',
+        vol_window: values.volWindow ? parseInt(values.volWindow) : 20,
+        lower_q: 0.2,
+        upper_q: 0.8,
         test_size: 0.2
       })
 
@@ -191,7 +198,7 @@ function MLPanel() {
         features: selectedFeatures
       })
 
-      setPredictionResult(res.data)
+      setPredictionResult(res.data.prediction)
       message.success('预测完成!')
     } catch (err) {
       message.error('预测失败: ' + (err.message || '未知错误'))
@@ -211,8 +218,8 @@ function MLPanel() {
   }
 
   const getSignalColor = (signal) => {
-    if (signal === '买入') return 'green'
-    if (signal === '卖出') return 'red'
+    if (signal === '买入' || signal === '轻度买入' || signal === '强烈买入') return 'green'
+    if (signal === '卖出' || signal === '轻度卖出' || signal === '强烈卖出') return 'red'
     return 'gray'
   }
 
@@ -241,7 +248,7 @@ function MLPanel() {
               </Form.Item>
 
               <Form.Item name="modelType" label="模型类型" style={{ marginBottom: 8 }}>
-                <Select value={modelType} onChange={setModelType}>
+                <Select>
                   <Select.Option value="RandomForest">随机森林</Select.Option>
                   <Select.Option value="LightGBM">LightGBM</Select.Option>
                 </Select>
@@ -253,6 +260,28 @@ function MLPanel() {
                 </Form.Item>
                 <Form.Item name="endDate" label="结束" style={{ flex: 1, marginBottom: 0 }}>
                   <DatePicker placeholder="结束日期" format="YYYYMMDD" />
+                </Form.Item>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Form.Item name="horizon" label="预测天数" style={{ flex: 1, marginBottom: 0 }}>
+                  <Input type="number" placeholder="默认5" min={1} max={60} />
+                </Form.Item>
+                <Form.Item name="labelType" label="标签方法" style={{ flex: 1, marginBottom: 0 }}>
+                  <Select placeholder="默认固定阈值">
+                    <Select.Option value="fixed">固定阈值</Select.Option>
+                    <Select.Option value="volatility">波动率动态</Select.Option>
+                    <Select.Option value="multi">多分类</Select.Option>
+                  </Select>
+                </Form.Item>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Form.Item name="threshold" label="阈值%" style={{ flex: 1, marginBottom: 0 }}>
+                  <Input type="number" placeholder="默认2" min={0.1} max={10} step={0.1} />
+                </Form.Item>
+                <Form.Item name="volWindow" label="波动窗口" style={{ flex: 1, marginBottom: 0 }}>
+                  <Input type="number" placeholder="默认20" min={5} max={60} />
                 </Form.Item>
               </div>
 
@@ -402,7 +431,9 @@ function MLPanel() {
 
               {predictionResult && (
                 <div style={{ marginTop: 16, padding: 12, background: '#1a1a2e', borderRadius: 4 }}>
-                  <div style={{ color: '#888', marginBottom: 8 }}>预测结果</div>
+                  <div style={{ color: '#888', marginBottom: 8 }}>
+                    预测结果 {predictionResult.label_type === 'multi' && <Tag color="purple" size="small">5分类</Tag>}
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                     <Tag color={getSignalColor(predictionResult.signal)} style={{ fontSize: 16, padding: '4px 16px' }}>
                       {predictionResult.signal}
@@ -410,9 +441,11 @@ function MLPanel() {
                     <span style={{ color: '#fff' }}>置信度: {(predictionResult.confidence * 100).toFixed(1)}%</span>
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
-                    买入: {(predictionResult.probabilities?.buy || 0 * 100).toFixed(1)}% |
-                    卖出: {(predictionResult.probabilities?.sell || 0).toFixed(1)}% |
-                    持有: {(predictionResult.probabilities?.hold || 0).toFixed(1)}%
+                    {Object.entries(predictionResult.probabilities || {}).map(([key, val]) => (
+                      <span key={key} style={{ marginRight: 12 }}>
+                        {key}: {(val * 100).toFixed(1)}%
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
