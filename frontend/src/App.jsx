@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Layout, Typography, message, Row, Col, Slider } from 'antd'
+import { Layout, Typography, message, Row, Col, Slider, Button } from 'antd'
 import { io } from 'socket.io-client'
 import axios from 'axios'
 import BacktestForm from './components/BacktestForm'
@@ -12,6 +12,7 @@ const { Header, Content } = Layout
 const { Title } = Typography
 
 function App() {
+  const [activeModule, setActiveModule] = useState('backtest')
   const [loading, setLoading] = useState(false)
   const [taskId, setTaskId] = useState(null)
   const [status, setStatus] = useState('pending')
@@ -230,57 +231,76 @@ function App() {
 
   return (
     <Layout style={{ minHeight: '100vh', background: '#0a0a1a' }}>
-      <Header style={{ background: '#1a1a2e', padding: '0 24px', display: 'flex', alignItems: 'center' }}>
-        <Title level={4} style={{ color: '#fff', margin: 0 }}>A股回测系统</Title>
+      <Header style={{ background: '#1a1a2e', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Title level={4} style={{ color: '#fff', margin: 0 }}>A股量化系统</Title>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button
+            type={activeModule === 'backtest' ? 'primary' : 'default'}
+            onClick={() => setActiveModule('backtest')}
+          >
+            回测
+          </Button>
+          <Button
+            type={activeModule === 'ml' ? 'primary' : 'default'}
+            onClick={() => setActiveModule('ml')}
+          >
+            机器学习
+          </Button>
+        </div>
       </Header>
       <Content style={{ padding: 12, background: '#0a0a1a' }}>
-        <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
-          <Col span={17} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
-            <div style={{ height: 360, background: '#1a1a2e', borderRadius: 4, position: 'relative' }}>
-              <TradeViewChart
-                key={backtestKey}
-                data={chartData}
-                trades={trades}
-                result={result}
-                stock={currentStock}
-                liveData={liveChartData}
-                liveSignals={liveSignals}
-                speedControl={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: '#888', fontSize: 12 }}>速度:</span>
-                    <Slider
-                      style={{ width: 120 }}
-                      min={1}
-                      max={100}
-                      value={speed}
-                      onChange={(value) => {
-                        setSpeed(value)
-                        if (socket && taskId) {
-                          socket.emit('set_speed', { task_id: taskId, speed: value, client_id: socketId })
-                        }
-                      }}
-                    />
-                    <span style={{ color: '#888', fontSize: 12, width: 40 }}>{speed === 100 ? '不限速' : `${speed}%`}</span>
-                  </div>
-                }
-              />
-            </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <TradeHistory trades={trades} analysis={analysis} liveEquity={liveEquity} liveStats={liveStats} liveSignals={liveSignals} liveTrades={liveTrades} />
-            </div>
-          </Col>
-          <Col span={7} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
-            <div style={{ flex: '0 0 280px' }}>
-              <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} strategies={strategies} />
-            </div>
-            <div style={{ flex: '0 0 300px' }}>
+        {activeModule === 'backtest' ? (
+          <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
+            <Col span={17} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
+              <div style={{ height: 360, background: '#1a1a2e', borderRadius: 4, position: 'relative' }}>
+                <TradeViewChart
+                  key={backtestKey}
+                  data={chartData}
+                  trades={trades}
+                  result={result}
+                  stock={currentStock}
+                  liveData={liveChartData}
+                  liveSignals={liveSignals}
+                  speedControl={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: '#888', fontSize: 12 }}>速度:</span>
+                      <Slider
+                        style={{ width: 120 }}
+                        min={1}
+                        max={100}
+                        value={speed}
+                        onChange={(value) => {
+                          setSpeed(value)
+                          if (socket && taskId) {
+                            socket.emit('set_speed', { task_id: taskId, speed: value, client_id: socketId })
+                          }
+                        }}
+                      />
+                      <span style={{ color: '#888', fontSize: 12, width: 40 }}>{speed === 100 ? '不限速' : `${speed}%`}</span>
+                    </div>
+                  }
+                />
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <TradeHistory trades={trades} analysis={analysis} liveEquity={liveEquity} liveStats={liveStats} liveSignals={liveSignals} liveTrades={liveTrades} />
+              </div>
+            </Col>
+            <Col span={7} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
+              <div style={{ flex: '0 0 280px' }}>
+                <BacktestForm onSubmit={handleSubmit} loading={loading} progress={progress} status={status} paused={paused} onPause={handlePause} onResume={handleResume} onStop={handleStop} strategies={strategies} />
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <LogOutput logs={logs} />
+              </div>
+            </Col>
+          </Row>
+        ) : (
+          <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
+            <Col span={24} style={{ height: '100%' }}>
               <MLPanel />
-            </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <LogOutput logs={logs} />
-            </div>
-          </Col>
-        </Row>
+            </Col>
+          </Row>
+        )}
       </Content>
     </Layout>
   )
