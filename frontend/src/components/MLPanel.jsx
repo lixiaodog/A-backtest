@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, AutoComplete } from 'antd'
+import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, AutoComplete, Input } from 'antd'
 import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, ExperimentOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
@@ -94,6 +94,7 @@ function MLPanel() {
     try {
       const res = await axios.post('http://localhost:5000/api/ml/train', {
         stock: values.stock,
+        model_name: values.modelName || null,
         start_date: values.startDate ? values.startDate.format('YYYYMMDD') : '20240101',
         end_date: values.endDate ? values.endDate.format('YYYYMMDD') : '20260401',
         features: selectedFeatures,
@@ -235,6 +236,10 @@ function MLPanel() {
                 </Select>
               </Form.Item>
 
+              <Form.Item name="modelName" label="模型名称" style={{ marginBottom: 8 }}>
+                <Input placeholder="输入模型名称（可选）" />
+              </Form.Item>
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <Form.Item name="startDate" label="开始" style={{ flex: 1, marginBottom: 0 }}>
                   <DatePicker placeholder="开始日期" format="YYYYMMDD" />
@@ -275,14 +280,14 @@ function MLPanel() {
                   size="small"
                   onClick={() => {
                     if (featureType === 'alpha191') {
-                      setSelectedFeatures(alphaFeatures.slice(0, 30))
-                      form.setFieldsValue({ features: alphaFeatures.slice(0, 30) })
+                      setSelectedFeatures(alphaFeatures)
+                      form.setFieldsValue({ features: alphaFeatures })
                     } else if (featureType === 'technical') {
                       setSelectedFeatures(technicalFeatures)
                       form.setFieldsValue({ features: technicalFeatures })
                     } else {
-                      setSelectedFeatures([...technicalFeatures, ...alphaFeatures.slice(0, 30)])
-                      form.setFieldsValue({ features: [...technicalFeatures, ...alphaFeatures.slice(0, 30)] })
+                      setSelectedFeatures([...technicalFeatures, ...alphaFeatures])
+                      form.setFieldsValue({ features: [...technicalFeatures, ...alphaFeatures] })
                     }
                   }}
                 >
@@ -309,7 +314,7 @@ function MLPanel() {
                 <Select placeholder="选择基座模型">
                   {models.map(m => (
                     <Select.Option key={m.model_id} value={m.model_id}>
-                      {m.stock} - {m.accuracy?.toFixed(2)} - {m.trained_at?.slice(0, 10)}
+                      {m.model_name || m.stock}
                     </Select.Option>
                   ))}
                 </Select>
@@ -370,7 +375,7 @@ function MLPanel() {
                 <Select placeholder="选择模型">
                   {models.map(m => (
                     <Select.Option key={m.model_id} value={m.model_id}>
-                      {m.stock} - {m.accuracy?.toFixed(2)} - {m.trained_at?.slice(0, 10)}
+                      {m.model_name || m.stock}
                     </Select.Option>
                   ))}
                 </Select>
@@ -443,9 +448,10 @@ function MLPanel() {
             pagination={false}
             scroll={{ y: 200 }}
             columns={[
+              { title: '模型名称', dataIndex: 'model_name', width: 180, ellipsis: true },
               { title: '股票', dataIndex: 'stock', width: 80 },
-              { title: '特征数', dataIndex: 'feature_count', width: 60 },
               { title: '准确率', dataIndex: 'accuracy', width: 70, render: v => v ? (v * 100).toFixed(1) + '%' : '-' },
+              { title: '特征', dataIndex: 'feature_count', width: 50 },
               { title: '训练时间', dataIndex: 'trained_at', width: 120, render: v => v?.slice(0, 19) },
               {
                 title: '操作',

@@ -27,12 +27,13 @@ class ModelRegistry:
 
     def register_model(self, stock_code, start_date, end_date, model_type, features,
                       file_path, metrics, parent_model_id=None, incremental_data=None,
-                      scaler_params=None):
+                      scaler_params=None, model_name=None):
         data = self._load_registry()
 
         model_info = {
             'id': str(uuid.uuid4()),
             'stock_code': stock_code,
+            'model_name': model_name,
             'start_date': start_date,
             'end_date': end_date,
             'model_type': model_type,

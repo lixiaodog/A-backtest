@@ -213,6 +213,7 @@ def ml_train():
     try:
         data = request.json
         stock_code = data.get('stock_code') or data.get('stock')
+        model_name = data.get('model_name')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         model_type = data.get('model_type', 'RandomForest')
@@ -249,8 +250,12 @@ def ml_train():
 
         scaler_params = feature_engineer.get_scaler_params()
 
+        if not model_name:
+            model_name = f'{stock_code}_{model_type}_{len(features)}f_{result["test_metrics"]["accuracy"]:.2f}'
+
         model_info = registry.register_model(
             stock_code=stock_code,
+            model_name=model_name,
             start_date=start_date,
             end_date=end_date,
             model_type=model_type,
