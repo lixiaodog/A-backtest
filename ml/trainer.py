@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import lightgbm as lgb
 
 
 class ModelTrainer:
@@ -21,6 +22,16 @@ class ModelTrainer:
                 max_depth=kwargs.get('max_depth', 10),
                 random_state=kwargs.get('random_state', 42),
                 n_jobs=-1
+            )
+        elif model_type == 'LightGBM':
+            model = lgb.LGBMClassifier(
+                n_estimators=kwargs.get('n_estimators', 100),
+                max_depth=kwargs.get('max_depth', 10),
+                learning_rate=kwargs.get('learning_rate', 0.1),
+                num_leaves=kwargs.get('num_leaves', 31),
+                random_state=kwargs.get('random_state', 42),
+                n_jobs=-1,
+                verbose=-1
             )
         else:
             raise ValueError(f'不支持的模型类型: {model_type}')
@@ -71,6 +82,22 @@ class ModelTrainer:
             all_X = pd.concat([X_new], ignore_index=True)
             all_y = pd.concat([y_new], ignore_index=True)
 
+            new_model.fit(all_X, all_y)
+            return new_model
+        elif model_type == 'LightGBM':
+            all_X = pd.concat([X_new], ignore_index=True)
+            all_y = pd.concat([y_new], ignore_index=True)
+
+            n_estimators = kwargs.get('n_estimators', base_model.n_estimators + 20)
+            new_model = lgb.LGBMClassifier(
+                n_estimators=n_estimators,
+                max_depth=kwargs.get('max_depth', 10),
+                learning_rate=kwargs.get('learning_rate', 0.1),
+                num_leaves=kwargs.get('num_leaves', 31),
+                random_state=kwargs.get('random_state', 42),
+                n_jobs=-1,
+                verbose=-1
+            )
             new_model.fit(all_X, all_y)
             return new_model
         else:

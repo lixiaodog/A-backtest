@@ -85,7 +85,7 @@ function MLPanel() {
       id: Date.now(),
       time: new Date().toLocaleString(),
       stock: values.stock,
-      model: 'RandomForest',
+      model: values.modelType || 'RandomForest',
       features: selectedFeatures.length,
       status: '训练中...'
     }
@@ -98,7 +98,7 @@ function MLPanel() {
         start_date: values.startDate ? values.startDate.format('YYYYMMDD') : '20240101',
         end_date: values.endDate ? values.endDate.format('YYYYMMDD') : '20260401',
         features: selectedFeatures,
-        model_type: 'RandomForest',
+        model_type: values.modelType || 'RandomForest',
         test_size: 0.2
       })
 
@@ -240,6 +240,13 @@ function MLPanel() {
                 <Input placeholder="输入模型名称（可选）" />
               </Form.Item>
 
+              <Form.Item name="modelType" label="模型类型" style={{ marginBottom: 8 }}>
+                <Select value={modelType} onChange={setModelType}>
+                  <Select.Option value="RandomForest">随机森林</Select.Option>
+                  <Select.Option value="LightGBM">LightGBM</Select.Option>
+                </Select>
+              </Form.Item>
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <Form.Item name="startDate" label="开始" style={{ flex: 1, marginBottom: 0 }}>
                   <DatePicker placeholder="开始日期" format="YYYYMMDD" />
@@ -313,7 +320,7 @@ function MLPanel() {
               <Form.Item name="base_model" label="基座模型" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
                 <Select placeholder="选择基座模型">
                   {models.map(m => (
-                    <Select.Option key={m.model_id} value={m.model_id}>
+                    <Select.Option key={m.id} value={m.id}>
                       {m.model_name || m.stock}
                     </Select.Option>
                   ))}
@@ -374,7 +381,7 @@ function MLPanel() {
               <Form.Item name="model_id" label="模型" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
                 <Select placeholder="选择模型">
                   {models.map(m => (
-                    <Select.Option key={m.model_id} value={m.model_id}>
+                    <Select.Option key={m.id} value={m.id}>
                       {m.model_name || m.stock}
                     </Select.Option>
                   ))}
@@ -444,7 +451,7 @@ function MLPanel() {
           <Table
             size="small"
             dataSource={models}
-            rowKey="model_id"
+            rowKey="id"
             pagination={false}
             scroll={{ y: 200 }}
             columns={[
@@ -457,7 +464,7 @@ function MLPanel() {
                 title: '操作',
                 width: 60,
                 render: (_, record) => (
-                  <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => handleDeleteModel(record.model_id)} />
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => handleDeleteModel(record.id)} />
                 )
               }
             ]}
