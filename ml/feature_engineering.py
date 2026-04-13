@@ -78,7 +78,10 @@ class FeatureEngineer:
                 if name in alpha_df.columns:
                     result[name] = alpha_df[name]
 
+        result = result.replace([np.inf, -np.inf], np.nan)
         result = result.dropna()
+        result = result.astype(np.float32)
+        result = result.clip(-1e10, 1e10)
         return result
 
     def generate_labels(self, df: pd.DataFrame, horizon: int = 5, threshold: float = 0.02) -> pd.Series:
