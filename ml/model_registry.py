@@ -28,7 +28,8 @@ class ModelRegistry:
     def register_model(self, stock_code, start_date, end_date, model_type, features,
                       file_path, metrics, parent_model_id=None, incremental_data=None,
                       scaler_params=None, model_name=None, label_type='fixed',
-                      horizon=5, threshold=0.02, vol_window=20, lower_q=0.2, upper_q=0.8):
+                      horizon=5, threshold=0.02, vol_window=20, lower_q=0.2, upper_q=0.8,
+                      mode='classification', is_ensemble=False):
         data = self._load_registry()
 
         model_info = {
@@ -51,7 +52,9 @@ class ModelRegistry:
             'threshold': threshold,
             'vol_window': vol_window,
             'lower_q': lower_q,
-            'upper_q': upper_q
+            'upper_q': upper_q,
+            'mode': mode,
+            'is_ensemble': is_ensemble
         }
 
         data['models'].append(model_info)

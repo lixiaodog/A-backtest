@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react'
-import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, AutoComplete, Input } from 'antd'
-import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, Input, Switch } from 'antd'
+import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
 function MLPanel() {
+  const [markets, setMarkets] = useState(['SZ', 'SH', 'BJ'])
+  const [periods, setPeriods] = useState(['1d', '1m', '5m', '15m', '30m', '60m', '1h', '4h', '1w'])
+  const [selectedMarket, setSelectedMarket] = useState('SZ')
+  const [selectedPeriod, setSelectedPeriod] = useState('1d')
   const [stocks, setStocks] = useState([])
   const [loading, setLoading] = useState(false)
   const [training, setTraining] = useState(false)
@@ -17,21 +21,77 @@ function MLPanel() {
   const [trainingLogs, setTrainingLogs] = useState([])
   const [predictionResult, setPredictionResult] = useState(null)
   const [form] = Form.useForm()
+  const useEnsemble = Form.useWatch('useEnsemble', form)
+
+  const generateModelName = () => {
+    const market = selectedMarket || 'SZ'
+    const period = (selectedPeriod || '1d').toUpperCase()
+    const model = useEnsemble ? 'ensemble' : (form.getFieldValue('modelType') || 'RF')
+    const date = new Date().toLocaleDateString('zh-CN').replace(/\//g, '').slice(2)
+    const features = selectedFeatures.length || 0
+    const horizon = form.getFieldValue('horizon') || 5
+    return `${market}_${period}_${model}_${date}_${features}f_${horizon}h`
+  }
 
   useEffect(() => {
     loadModels()
     loadTechnicalFeatures()
     loadAlphaFeatures()
+    loadMarkets()
+    loadPeriods()
     loadStocks()
   }, [])
 
-  const loadStocks = async () => {
+  useEffect(() => {
+    if (form.getFieldValue('modelName') === undefined || form.getFieldValue('modelName') === '') {
+      form.setFieldsValue({ modelName: generateModelName() })
+    }
+  }, [selectedMarket, selectedPeriod, useEnsemble, selectedFeatures])
+
+  const loadMarkets = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/ml/stocks')
+      const res = await axios.get('http://localhost:5000/api/ml/markets')
+      if (res.data && res.data.length > 0) {
+        setMarkets(res.data)
+        setSelectedMarket(res.data[0])
+      }
+    } catch (err) {
+      console.error('Failed to load markets:', err)
+    }
+  }
+
+  const loadPeriods = async (market) => {
+    try {
+      const res = await axios.get(`http://localhost:5000/api/ml/periods?market=${market || selectedMarket}`)
+      if (res.data && res.data.length > 0) {
+        setPeriods(res.data)
+      }
+    } catch (err) {
+      console.error('Failed to load periods:', err)
+    }
+  }
+
+  const loadStocks = async (market, period) => {
+    try {
+      const mkt = market || selectedMarket
+      const prd = period || selectedPeriod
+      const res = await axios.get(`http://localhost:5000/api/ml/stocks?market=${mkt}&period=${prd}`)
       setStocks(res.data || [])
     } catch (err) {
       console.error('Failed to load stocks:', err)
     }
+  }
+
+  const handleMarketChange = (market) => {
+    setSelectedMarket(market)
+    setSelectedPeriod('1d')
+    loadPeriods(market)
+    loadStocks(market, '1d')
+  }
+
+  const handlePeriodChange = (period) => {
+    setSelectedPeriod(period)
+    loadStocks(selectedMarket, period)
   }
 
   const loadModels = async () => {
@@ -78,23 +138,40 @@ function MLPanel() {
       message.error('请至少选择一个特征')
       return
     }
+
+    let selectedStocks = values.stock || []
+    if (selectedStocks.includes('__SELECT_ALL__')) {
+      selectedStocks = stocks
+    }
+
+    if (selectedStocks.length === 0) {
+      message.error('请至少选择一只股票')
+      return
+    }
+
     setTraining(true)
     setProgress(0)
     setPredictionResult(null)
 
+    const stockDisplay = selectedStocks.length > 1 ? `${selectedStocks.length}只股票` : selectedStocks[0]
+
     const logEntry = {
       id: Date.now(),
       time: new Date().toLocaleString(),
-      stock: values.stock,
-      model: values.modelType || 'RandomForest',
+      stock: stockDisplay,
+      model: values.useEnsemble ? 'Ensemble' : (values.modelType || 'RandomForest'),
       features: selectedFeatures.length,
-      status: '训练中...'
+      status: '等待开始...',
+      progress: 0,
+      message: ''
     }
     setTrainingLogs(prev => [logEntry, ...prev])
 
     try {
       const res = await axios.post('http://localhost:5000/api/ml/train', {
-        stock: values.stock,
+        stock: selectedStocks,
+        market: selectedMarket,
+        period: selectedPeriod,
         model_name: values.modelName || null,
         start_date: values.startDate ? values.startDate.format('YYYYMMDD') : '20240101',
         end_date: values.endDate ? values.endDate.format('YYYYMMDD') : '20260401',
@@ -106,15 +183,45 @@ function MLPanel() {
         vol_window: values.volWindow ? parseInt(values.volWindow) : 20,
         lower_q: 0.2,
         upper_q: 0.8,
+        mode: values.mode || 'classification',
+        use_ensemble: values.useEnsemble || false,
         test_size: 0.2
       })
 
+      const taskId = res.data.task_id
       setTrainingLogs(prev => prev.map(log =>
         log.id === logEntry.id
-          ? { ...log, status: '完成', accuracy: res.data.accuracy, model_id: res.data.model_id }
+          ? { ...log, status: '训练中', model_id: res.data.models ? res.data.models[0]?.id : res.data.model?.id }
           : log
       ))
-      message.success('训练完成!')
+
+      const pollProgress = setInterval(async () => {
+        try {
+          const progressRes = await axios.get(`http://localhost:5000/api/ml/train/progress/${taskId}`)
+          if (progressRes.data.status === 'unknown') {
+            clearInterval(pollProgress)
+            return
+          }
+          setTrainingLogs(prev => prev.map(log =>
+            log.id === logEntry.id
+              ? { ...log, progress: progressRes.data.progress || 0, status: progressRes.data.status || '训练中', message: progressRes.data.message || '' }
+              : log
+          ))
+          setProgress(progressRes.data.progress || 0)
+          if (progressRes.data.progress >= 100) {
+            clearInterval(pollProgress)
+          }
+        } catch (e) {
+          clearInterval(pollProgress)
+        }
+      }, 1000)
+
+      setTrainingLogs(prev => prev.map(log =>
+        log.id === logEntry.id
+          ? { ...log, status: '完成', model_id: res.data.models ? res.data.models[0]?.id : res.data.model?.id }
+          : log
+      ))
+      message.success(values.useEnsemble ? `训练完成！共${res.data.models?.length || 0}个子模型` : '训练完成!')
       loadModels()
       setProgress(100)
     } catch (err) {
@@ -123,7 +230,7 @@ function MLPanel() {
           ? { ...log, status: '失败: ' + (err.message || '未知错误') }
           : log
       ))
-      message.error('训练失败: ' + (err.message || '未知错误'))
+      message.error('训练失败: ' + (err.response?.data?.error || err.message || '未知错误'))
     } finally {
       setTraining(false)
     }
@@ -147,7 +254,7 @@ function MLPanel() {
       id: Date.now(),
       time: new Date().toLocaleString(),
       stock: values.stock,
-      model: 'RandomForest(增量)',
+      model: '增量训练',
       features: selectedFeatures.length,
       status: '增量训练中...'
     }
@@ -164,7 +271,7 @@ function MLPanel() {
 
       setTrainingLogs(prev => prev.map(log =>
         log.id === logEntry.id
-          ? { ...log, status: '完成', accuracy: res.data.accuracy, model_id: res.data.model_id }
+          ? { ...log, status: '完成', model_id: res.data.model?.id }
           : log
       ))
       message.success('增量训练完成!')
@@ -201,7 +308,7 @@ function MLPanel() {
       setPredictionResult(res.data.prediction)
       message.success('预测完成!')
     } catch (err) {
-      message.error('预测失败: ' + (err.message || '未知错误'))
+      message.error('预测失败: ' + (err.response?.data?.error || err.message || '未知错误'))
     } finally {
       setLoading(false)
     }
@@ -223,6 +330,69 @@ function MLPanel() {
     return 'gray'
   }
 
+  const renderPredictionResult = (result) => {
+    if (!result) return null
+
+    const isRegression = result.predicted_return !== undefined
+
+    return (
+      <div style={{ marginTop: 16, padding: 12, background: '#1a1a2e', borderRadius: 4 }}>
+        <div style={{ color: '#888', marginBottom: 8 }}>
+          预测结果
+          {result.label_type === 'multi' && <Tag color="purple" size="small">5分类</Tag>}
+          {result.label_type === 'regression' && <Tag color="blue" size="small">回归</Tag>}
+        </div>
+
+        {isRegression ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+              <Tag color={getSignalColor(result.signal)} style={{ fontSize: 16, padding: '4px 16px' }}>
+                {result.signal}
+              </Tag>
+              <span style={{ color: '#fff' }}>
+                预测收益率: {(result.predicted_return * 100).toFixed(2)}%
+              </span>
+              {result.confidence !== null && result.confidence !== undefined && (
+                <span style={{ color: '#fff' }}>
+                  置信度: {(result.confidence * 100).toFixed(1)}%
+                </span>
+              )}
+            </div>
+            {result.model_predictions && (
+              <div style={{ fontSize: 12, color: '#888' }}>
+                <div style={{ marginBottom: 4 }}>各模型预测:</div>
+                {Object.entries(result.model_predictions).map(([name, pred]) => (
+                  <span key={name} style={{ marginRight: 12 }}>
+                    {name}: {(pred * 100).toFixed(2)}%
+                  </span>
+                ))}
+                {result.std !== undefined && (
+                  <div style={{ marginTop: 4 }}>标准差: {(result.std * 100).toFixed(2)}%</div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <Tag color={getSignalColor(result.signal)} style={{ fontSize: 16, padding: '4px 16px' }}>
+                {result.signal}
+              </Tag>
+              <span style={{ color: '#fff' }}>置信度: {(result.confidence * 100).toFixed(1)}%</span>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
+              {Object.entries(result.probabilities || {}).map(([key, val]) => (
+                <span key={key} style={{ marginRight: 12 }}>
+                  {key}: {(val * 100).toFixed(1)}%
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   const currentFeatures = getCurrentFeatures()
 
   return (
@@ -235,21 +405,54 @@ function MLPanel() {
         <Tabs.TabPane tab="训练" key="1">
           <Form form={form} layout="vertical" onFinish={handleTrain}>
             <Space direction="vertical" style={{ width: '100%' }}>
-              <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
-                <Select showSearch allowClear placeholder="选择股票">
-                  {stocks.map(s => (
-                    <Select.Option key={s} value={s}>{s}</Select.Option>
-                  ))}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Form.Item name="market" label="市场" style={{ marginBottom: 0 }}>
+                  <Select value={selectedMarket} onChange={handleMarketChange} style={{ width: 80 }}>
+                    {markets.map(m => <Select.Option key={m} value={m}>{m}</Select.Option>)}
+                  </Select>
+                </Form.Item>
+                <Form.Item name="period" label="周期" style={{ marginBottom: 0 }}>
+                  <Select value={selectedPeriod} onChange={handlePeriodChange} style={{ width: 80 }}>
+                    {periods.map(p => <Select.Option key={p} value={p}>{p}</Select.Option>)}
+                  </Select>
+                </Form.Item>
+                <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    allowClear
+                    placeholder="选择股票（支持多选）"
+                    maxTagCount={3}
+                  >
+                    <Select.Option key="select_all" value="__SELECT_ALL__">全选</Select.Option>
+                    {stocks.map(s => (
+                      <Select.Option key={s} value={s}>{s}</Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </div>
+
+              <Form.Item name="modelName" label="模型名称" style={{ marginBottom: 8 }}>
+                <Input.Group compact style={{ display: 'flex' }}>
+                  <Input style={{ flex: 1 }} placeholder="自动生成" />
+                  <Button onClick={() => form.setFieldsValue({ modelName: generateModelName() })}>刷新</Button>
+                </Input.Group>
+              </Form.Item>
+
+              <Form.Item name="mode" label="训练模式" style={{ marginBottom: 8 }}>
+                <Select>
+                  <Select.Option value="classification">分类</Select.Option>
+                  <Select.Option value="regression">回归</Select.Option>
                 </Select>
               </Form.Item>
 
-              <Form.Item name="modelName" label="模型名称" style={{ marginBottom: 8 }}>
-                <Input placeholder="输入模型名称（可选）" />
+              <Form.Item name="useEnsemble" label="使用集成模型" valuePropName="checked" style={{ marginBottom: 8 }}>
+                <Switch />
               </Form.Item>
 
-              <Form.Item name="modelType" label="模型类型" style={{ marginBottom: 8 }}>
-                <Select>
-                  <Select.Option value="RandomForest">随机森林</Select.Option>
+              <Form.Item name="modelType" label="基础模型" style={{ marginBottom: 8 }}>
+                <Select disabled={useEnsemble}>
+                  <Select.Option value="RandomForest">RandomForest</Select.Option>
                   <Select.Option value="LightGBM">LightGBM</Select.Option>
                 </Select>
               </Form.Item>
@@ -267,7 +470,7 @@ function MLPanel() {
                 <Form.Item name="horizon" label="预测天数" style={{ flex: 1, marginBottom: 0 }}>
                   <Input type="number" placeholder="默认5" min={1} max={60} />
                 </Form.Item>
-                <Form.Item name="labelType" label="标签方法" style={{ flex: 1, marginBottom: 0 }}>
+                <Form.Item name="labelType" label="分类标签" style={{ flex: 1, marginBottom: 0 }}>
                   <Select placeholder="默认固定阈值">
                     <Select.Option value="fixed">固定阈值</Select.Option>
                     <Select.Option value="volatility">波动率动态</Select.Option>
@@ -429,26 +632,7 @@ function MLPanel() {
                 预测
               </Button>
 
-              {predictionResult && (
-                <div style={{ marginTop: 16, padding: 12, background: '#1a1a2e', borderRadius: 4 }}>
-                  <div style={{ color: '#888', marginBottom: 8 }}>
-                    预测结果 {predictionResult.label_type === 'multi' && <Tag color="purple" size="small">5分类</Tag>}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <Tag color={getSignalColor(predictionResult.signal)} style={{ fontSize: 16, padding: '4px 16px' }}>
-                      {predictionResult.signal}
-                    </Tag>
-                    <span style={{ color: '#fff' }}>置信度: {(predictionResult.confidence * 100).toFixed(1)}%</span>
-                  </div>
-                  <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
-                    {Object.entries(predictionResult.probabilities || {}).map(([key, val]) => (
-                      <span key={key} style={{ marginRight: 12 }}>
-                        {key}: {(val * 100).toFixed(1)}%
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {renderPredictionResult(predictionResult)}
             </Space>
           </Form>
         </Tabs.TabPane>
@@ -466,6 +650,14 @@ function MLPanel() {
               { title: '模型', dataIndex: 'model', width: 100 },
               { title: '特征', dataIndex: 'features', width: 50 },
               {
+                title: '进度',
+                dataIndex: 'progress',
+                width: 80,
+                render: (pct, record) => record.status.includes('完成') || record.status.includes('失败')
+                  ? null
+                  : <Progress percent={pct || 0} size="small" status="active" />
+              },
+              {
                 title: '状态',
                 dataIndex: 'status',
                 width: 100,
@@ -475,7 +667,12 @@ function MLPanel() {
                   return <Tag color="blue">{status}</Tag>
                 }
               },
-              { title: '准确率', dataIndex: 'accuracy', width: 70, render: v => v ? (v * 100).toFixed(1) + '%' : '-' }
+              {
+                title: '信息',
+                dataIndex: 'message',
+                width: 150,
+                ellipsis: true
+              }
             ]}
           />
         </Tabs.TabPane>
@@ -489,10 +686,21 @@ function MLPanel() {
             scroll={{ y: 200 }}
             columns={[
               { title: '模型名称', dataIndex: 'model_name', width: 180, ellipsis: true },
-              { title: '股票', dataIndex: 'stock', width: 80 },
-              { title: '准确率', dataIndex: 'accuracy', width: 70, render: v => v ? (v * 100).toFixed(1) + '%' : '-' },
+              { title: '股票', dataIndex: 'stock_code', width: 80 },
+              {
+                title: '模式',
+                dataIndex: 'mode',
+                width: 60,
+                render: mode => mode === 'regression' ? <Tag color="blue">回归</Tag> : <Tag>分类</Tag>
+              },
+              {
+                title: '集成',
+                dataIndex: 'is_ensemble',
+                width: 60,
+                render: v => v ? <Tag color="purple">是</Tag> : <Tag>否</Tag>
+              },
               { title: '特征', dataIndex: 'feature_count', width: 50 },
-              { title: '训练时间', dataIndex: 'trained_at', width: 120, render: v => v?.slice(0, 19) },
+              { title: '训练时间', dataIndex: 'created_at', width: 120, render: v => v?.slice(0, 19) },
               {
                 title: '操作',
                 width: 60,

@@ -11,6 +11,7 @@ import traceback
 import uuid
 import sys
 import os
+import pandas as pd
 import backtrader as bt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -129,6 +130,7 @@ watcher_thread = threading.Thread(target=watch_strategies_folder, daemon=True)
 watcher_thread.start()
 
 tasks = {}
+training_tasks = {}
 
 backtest_tasks = tasks
 
@@ -203,6 +205,79 @@ def refresh_strategies():
     STRATEGY_MAP = {s['id']: s['class'] for s in STRATEGY_REGISTRY}
     return jsonify([{'id': s['id'], 'name': s['name']} for s in STRATEGY_REGISTRY])
 
+@app.route('/api/strategy-manager/list', methods=['GET'])
+def get_strategy_manager_list():
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    strategies = manager.get_all_strategies()
+    return jsonify(strategies)
+
+@app.route('/api/strategy-manager/<strategy_id>', methods=['GET'])
+def get_strategy_manager_detail(strategy_id):
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    strategy = manager.get_strategy_by_id(strategy_id)
+    if strategy:
+        return jsonify(strategy)
+    return jsonify({'error': 'Strategy not found'}), 404
+
+@app.route('/api/strategy-manager', methods=['POST'])
+def create_strategy_manager_strategy():
+    from strategy_manager import StrategyManager
+    try:
+        data = request.json
+        manager = StrategyManager()
+        strategy = manager.create_strategy(data)
+        return jsonify({'status': 'created', 'strategy': strategy}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/strategy-manager/<strategy_id>', methods=['PUT'])
+def update_strategy_manager_strategy(strategy_id):
+    from strategy_manager import StrategyManager
+    try:
+        data = request.json
+        manager = StrategyManager()
+        strategy = manager.update_strategy(strategy_id, data)
+        if strategy:
+            return jsonify({'status': 'updated', 'strategy': strategy})
+        return jsonify({'error': 'Strategy not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/strategy-manager/<strategy_id>', methods=['DELETE'])
+def delete_strategy_manager_strategy(strategy_id):
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    if manager.delete_strategy(strategy_id):
+        return jsonify({'status': 'deleted'})
+    return jsonify({'error': 'Strategy not found'}), 404
+
+@app.route('/api/strategy-manager/templates', methods=['GET'])
+def get_strategy_templates():
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    templates = manager.get_templates()
+    return jsonify(templates)
+
+@app.route('/api/strategy-manager/template/<template_id>', methods=['GET'])
+def get_strategy_template_detail(template_id):
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    template = manager.get_template(template_id)
+    if template:
+        return jsonify(template)
+    return jsonify({'error': 'Template not found'}), 404
+
+@app.route('/api/strategy-manager/<strategy_id>/code', methods=['GET'])
+def get_strategy_code(strategy_id):
+    from strategy_manager import StrategyManager
+    manager = StrategyManager()
+    code = manager.export_strategy_code(strategy_id)
+    if code:
+        return jsonify({'code': code})
+    return jsonify({'error': 'Strategy not found'}), 404
+
 @app.route('/api/chart/<filename>')
 def serve_chart(filename):
     results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results')
@@ -210,9 +285,15 @@ def serve_chart(filename):
 
 @app.route('/api/ml/train', methods=['POST'])
 def ml_train():
+    task_id = uuid.uuid4().hex[:8]
+    training_tasks[task_id] = {'progress': 0, 'status': '初始化...', 'message': ''}
+    print(f'[训练] 任务ID: {task_id} - 开始训练')
+
     try:
         data = request.json
-        stock_code = data.get('stock_code') or data.get('stock')
+        stock_param = data.get('stock_code') or data.get('stock')
+        market = data.get('market', 'SZ')
+        period = data.get('period', '1d')
         model_name = data.get('model_name')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
@@ -224,72 +305,210 @@ def ml_train():
         vol_window = data.get('vol_window', 20)
         lower_q = data.get('lower_q', 0.2)
         upper_q = data.get('upper_q', 0.8)
+        mode = data.get('mode', 'classification')
+        use_ensemble = data.get('use_ensemble', False)
+
+        print(f'[训练] 任务ID: {task_id} - 参数: stock={stock_param}, market={market}, period={period}, horizon={horizon}, use_ensemble={use_ensemble}')
 
         from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
 
         data_loader = MLDataLoader()
-        feature_engineer = FeatureEngineer()
         trainer = ModelTrainer()
         registry = ModelRegistry()
 
-        existing = registry.find_existing_model(stock_code, start_date, end_date, model_type, features)
-        if existing:
+        is_multiple_stocks = isinstance(stock_param, list)
+        stock_list = stock_param if is_multiple_stocks else [stock_param]
+        total_stocks = len(stock_list)
+
+        training_tasks[task_id] = {'progress': 5, 'status': '准备训练...',
+            'message': f'将按顺序处理 {total_stocks} 只股票，训练统一模型'}
+        print(f'[训练] 任务ID: {task_id} - 将按顺序处理 {total_stocks} 只股票')
+
+        if label_type == 'regression' or mode == 'regression':
+            prepare_func = 'prepare_data_regression'
+            mode = 'regression'
+        elif label_type == 'volatility':
+            prepare_func = 'prepare_data_with_volatility'
+        elif label_type == 'multi':
+            prepare_func = 'prepare_data_multi'
+        else:
+            prepare_func = 'prepare_data'
+
+        all_X = []
+        all_y = []
+        scaler_params = None
+        stock_sample_counts = {}
+
+        for idx, stock_code in enumerate(stock_list):
+            stock_progress = int((idx / total_stocks) * 60)
+            training_tasks[task_id] = {
+                'progress': stock_progress,
+                'status': f'处理股票 ({idx + 1}/{total_stocks})',
+                'message': f'正在处理 {stock_code}，提取特征...'
+            }
+            print(f'[训练] 任务ID: {task_id} - 处理股票 {idx + 1}/{total_stocks}: {stock_code}')
+
+            try:
+                raw_data = data_loader.load_stock_data(stock_code, start_date, end_date, period=period, market=market)
+            except FileNotFoundError:
+                print(f'[训练] 任务ID: {task_id} - 跳过不存在的股票: {stock_code}')
+                continue
+
+            if len(raw_data) < 100:
+                print(f'[训练] 任务ID: {task_id} - {stock_code} 原始数据量太少({len(raw_data)}条)，跳过')
+                continue
+
+            try:
+                feature_engineer = FeatureEngineer()
+
+                if prepare_func == 'prepare_data_regression':
+                    X, y = feature_engineer.prepare_data_regression(raw_data, features, horizon)
+                elif prepare_func == 'prepare_data_with_volatility':
+                    X, y = feature_engineer.prepare_data_with_volatility(raw_data, features, horizon, vol_window, lower_q, upper_q)
+                elif prepare_func == 'prepare_data_multi':
+                    X, y = feature_engineer.prepare_data_multi(raw_data, features, horizon, lower_q, upper_q)
+                else:
+                    X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
+
+                if len(X) < 50:
+                    print(f'[训练] 任务ID: {task_id} - {stock_code} 数据量太少({len(X)}条)，跳过')
+                    continue
+
+                stock_sample_counts[stock_code] = len(X)
+                scaler_params = feature_engineer.get_scaler_params()
+                all_X.append(X)
+                all_y.append(y)
+
+                print(f'[训练] 任务ID: {task_id} - {stock_code} 提取完成，样本数: {len(X)}')
+            except Exception as e:
+                print(f'[训练] 任务ID: {task_id} - {stock_code} 特征提取失败: {e}，跳过')
+                continue
+
+        if not all_X:
+            print(f'[训练] 任务ID: {task_id} - 没有足够的有效数据')
+            del training_tasks[task_id]
+            return jsonify({'error': '没有足够的有效数据，所有股票数据量都太少'}), 400
+
+        X = pd.concat(all_X, ignore_index=True)
+        y = pd.concat(all_y, ignore_index=True)
+
+        training_tasks[task_id] = {'progress': 60, 'status': '训练模型...',
+            'message': f'总样本数: {len(X)}，来自 {len(stock_sample_counts)} 只股票'}
+        print(f'[训练] 任务ID: {task_id} - 开始训练模型, 总样本数: {len(X)}, 股票样本分布: {stock_sample_counts}')
+
+        if use_ensemble:
+            print(f'[训练] 任务ID: {task_id} - 集成训练模式')
+            result = trainer.train_ensemble(X, y, mode=mode)
+            print(f'[训练] 任务ID: {task_id} - 集成训练完成, 指标: {result["test_metrics"]}')
+
+            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...',
+                'message': '正在保存子模型'}
+            print(f'[训练] 任务ID: {task_id} - 正在保存子模型...')
+
+            base_name = model_name or f'unified_ensemble_{len(features)}f_{total_stocks}stocks'
+            trained_models = []
+            for i, model_key in enumerate(result['models'].keys()):
+                training_tasks[task_id] = {'progress': 85 + i*5, 'status': '保存模型...',
+                    'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
+                print(f'[训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
+                model_obj = result['models'][model_key]
+                sub_filename = f'{base_name}_{model_key}.pkl'
+                sub_filepath = trainer.save_model(model_obj, sub_filename)
+                sub_metric = result['test_metrics'].get(model_key, {})
+                stock_display = f'{len(stock_sample_counts)}只股票'
+                sub_model_info = registry.register_model(
+                    stock_code=stock_display,
+                    model_name=f'{base_name}_{model_key}',
+                    start_date=start_date,
+                    end_date=end_date,
+                    model_type=model_key,
+                    features=features,
+                    file_path=sub_filepath,
+                    metrics=sub_metric,
+                    scaler_params=scaler_params,
+                    label_type=label_type,
+                    horizon=horizon,
+                    threshold=threshold,
+                    vol_window=vol_window,
+                    lower_q=lower_q,
+                    upper_q=upper_q,
+                    mode=mode,
+                    is_ensemble=False
+                )
+                trained_models.append(sub_model_info)
+
+            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+            print(f'[训练] 任务ID: {task_id} - 集成训练完成, 保存了{len(trained_models)}个子模型')
+            del training_tasks[task_id]
+
             return jsonify({
-                'status': 'existing',
-                'model': existing,
-                'message': '模型已存在，无需重复训练'
+                'status': 'trained',
+                'models': trained_models,
+                'metrics': result['test_metrics'],
+                'task_id': task_id,
+                'stock_sample_counts': stock_sample_counts
+            })
+        else:
+            print(f'[训练] 任务ID: {task_id} - 单模型训练模式, 模型: {model_type}')
+            result = trainer.train_with_split(X, y, model_type, mode=mode)
+            print(f'[训练] 任务ID: {task_id} - 模型训练完成, 指标: {result["test_metrics"]}')
+
+            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...', 'message': '正在保存模型'}
+            print(f'[训练] 任务_id: {task_id} - 正在保存模型...')
+
+            stock_display = f'{len(stock_sample_counts)}只股票'
+            if not model_name:
+                if mode == 'regression':
+                    main_metric = result['test_metrics']['r2']
+                else:
+                    main_metric = result['test_metrics']['accuracy']
+                model_name = f'unified_{model_type}_{len(features)}f_{total_stocks}stocks_{main_metric:.2f}'
+
+            filename = f'{model_name}.pkl'
+            filepath = trainer.save_model(result['model'], filename)
+
+            model_info = registry.register_model(
+                stock_code=stock_display,
+                model_name=model_name,
+                start_date=start_date,
+                end_date=end_date,
+                model_type=model_type,
+                features=features,
+                file_path=filepath,
+                metrics=result['test_metrics'],
+                scaler_params=scaler_params,
+                label_type=label_type,
+                horizon=horizon,
+                threshold=threshold,
+                vol_window=vol_window,
+                lower_q=lower_q,
+                upper_q=upper_q,
+                mode=mode,
+                is_ensemble=False
+            )
+
+            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+            print(f'[训练] 任务ID: {task_id} - 单模型训练完成, 模型已保存: {filename}')
+            del training_tasks[task_id]
+
+            return jsonify({
+                'status': 'trained',
+                'model': model_info,
+                'metrics': result['test_metrics'],
+                'task_id': task_id,
+                'stock_sample_counts': stock_sample_counts
             })
 
-        raw_data = data_loader.load_stock_data(stock_code, start_date, end_date)
-
-        if label_type == 'volatility':
-            X, y = feature_engineer.prepare_data_with_volatility(raw_data, features, horizon, vol_window, lower_q, upper_q)
-        elif label_type == 'multi':
-            X, y = feature_engineer.prepare_data_multi(raw_data, features, horizon, lower_q, upper_q)
-        else:
-            X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
-
-        if len(X) < 50:
-            return jsonify({'error': '数据量太少，至少需要50条数据'}), 400
-
-        result = trainer.train_with_split(X, y, model_type)
-
-        filename = f'{model_type.lower()}_{stock_code}_{uuid.uuid4().hex[:8]}.pkl'
-        filepath = trainer.save_model(result['model'], filename)
-
-        scaler_params = feature_engineer.get_scaler_params()
-
-        if not model_name:
-            model_name = f'{stock_code}_{model_type}_{len(features)}f_{result["test_metrics"]["accuracy"]:.2f}'
-
-        model_info = registry.register_model(
-            stock_code=stock_code,
-            model_name=model_name,
-            start_date=start_date,
-            end_date=end_date,
-            model_type=model_type,
-            features=features,
-            file_path=filepath,
-            metrics=result['test_metrics'],
-            scaler_params=scaler_params,
-            label_type=label_type,
-            horizon=horizon,
-            threshold=threshold,
-            vol_window=vol_window,
-            lower_q=lower_q,
-            upper_q=upper_q
-        )
-
-        return jsonify({
-            'status': 'trained',
-            'model': model_info,
-            'metrics': result['test_metrics']
-        })
-
     except FileNotFoundError as e:
+        print(f'[训练] 任务ID: {task_id} - 数据文件不存在: {e}')
+        if task_id in training_tasks:
+            del training_tasks[task_id]
         return jsonify({'error': f'数据文件不存在: {str(e)}'}), 404
     except Exception as e:
+        print(f'[训练] 任务ID: {task_id} - 训练失败: {e}')
         traceback.print_exc()
+        if task_id in training_tasks:
+            del training_tasks[task_id]
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/ml/train/incremental', methods=['POST'])
@@ -320,14 +539,17 @@ def ml_train_incremental():
         X, y = feature_engineer.prepare_data(
             raw_data,
             base_model_info['features'],
-            5,
-            0.02
+            base_model_info.get('horizon', 5),
+            base_model_info.get('threshold', 0.02)
         )
+
+        mode = base_model_info.get('mode', 'classification')
 
         new_model = trainer.train_incremental(
             base_model_info['file_path'],
             X, y,
-            base_model_info['model_type']
+            base_model_info['model_type'],
+            mode=mode
         )
 
         filename = f'{base_model_info["model_type"].lower()}_{base_model_info["stock_code"]}_inc_{uuid.uuid4().hex[:8]}.pkl'
@@ -348,7 +570,9 @@ def ml_train_incremental():
             file_path=filepath,
             metrics={},
             parent_model_id=base_model_id,
-            incremental_data=new_incremental_info
+            incremental_data=new_incremental_info,
+            mode=mode,
+            is_ensemble=base_model_info.get('is_ensemble', False)
         )
 
         return jsonify({
@@ -374,20 +598,50 @@ def ml_predict():
         if not model_info:
             return jsonify({'error': '模型不存在'}), 404
 
+        threshold = data.get('threshold', model_info.get('threshold', 0.02))
+
         trainer = ModelTrainer()
         model = trainer.load_model(model_info['file_path'])
-
-        feature_engineer = FeatureEngineer()
-        if model_info.get('scaler_params'):
-            feature_engineer.set_scaler_params(model_info['scaler_params'])
 
         data_loader = MLDataLoader()
         raw_data = data_loader.load_stock_data(stock_code)
 
         from ml.predictors import Predictor
+        mode = model_info.get('mode', 'classification')
         label_type = model_info.get('label_type', 'fixed')
+
+        if mode == 'regression':
+            label_type = 'regression'
+
+        feature_engineer = FeatureEngineer()
+        if model_info.get('scaler_params'):
+            feature_engineer.set_scaler_params(model_info['scaler_params'])
+
+        model_name = model_info.get('model_name', '')
+
+        ensemble_prefix = None
+        if '_ensemble_' in model_name or '_Ensemble_' in model_name:
+            parts = model_name.rsplit('_', 1)
+            if len(parts) > 1:
+                ensemble_prefix = parts[0]
+        elif 'ensemble' in model_name.lower() and model_info.get('is_ensemble'):
+            ensemble_prefix = model_name
+
+        if ensemble_prefix:
+            all_models = registry.get_all_models()
+            ensemble_models = {}
+
+            for m in all_models:
+                if m['model_name'] == model_name or m['model_name'].startswith(ensemble_prefix + '_'):
+                    sub_model = trainer.load_model(m['file_path'])
+                    ensemble_models[m['model_type']] = sub_model
+
+            if len(ensemble_models) > 1:
+                print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+                model = ensemble_models
+
         predictor = Predictor(model, feature_engineer, label_type)
-        result = predictor.predict(raw_data, model_info['features'])
+        result = predictor.predict(raw_data, model_info['features'], threshold=threshold)
 
         if result is None:
             return jsonify({'error': '无法生成预测，数据不足'}), 400
@@ -428,9 +682,15 @@ def ml_delete_model(model_id):
         if success:
             return jsonify({'status': 'deleted', 'model_id': model_id})
         else:
-            return jsonify({'error': '模型不存在'}), 404
+            return jsonify({'error': 'Model not found'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/train/progress/<task_id>', methods=['GET'])
+def ml_get_train_progress(task_id):
+    if task_id in training_tasks:
+        return jsonify(training_tasks[task_id])
+    return jsonify({'progress': 0, 'status': 'unknown'})
 
 @app.route('/api/ml/features', methods=['GET'])
 def ml_get_features():
@@ -451,10 +711,43 @@ def ml_get_features():
 @app.route('/api/ml/stocks', methods=['GET'])
 def ml_get_stocks():
     try:
+        market = request.args.get('market')
+        period = request.args.get('period', '1d')
         from ml import MLDataLoader
         loader = MLDataLoader()
-        stocks = loader.get_available_stocks()
+        stocks = loader.get_available_stocks(market=market, period=period)
         return jsonify(stocks)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/markets', methods=['GET'])
+def ml_get_markets():
+    try:
+        from ml import MLDataLoader
+        loader = MLDataLoader()
+        markets = loader.get_markets()
+        return jsonify(markets)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/periods', methods=['GET'])
+def ml_get_periods():
+    try:
+        market = request.args.get('market')
+        from ml import MLDataLoader
+        loader = MLDataLoader()
+        periods = loader.get_periods(market=market)
+        return jsonify(periods)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/data-tree', methods=['GET'])
+def ml_get_data_tree():
+    try:
+        from ml import MLDataLoader
+        loader = MLDataLoader()
+        tree = loader.get_data_tree()
+        return jsonify(tree)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -32,7 +32,8 @@ class Alpha191:
         return s.rolling(window=n).mean()
 
     def _corr(self, a, b, n):
-        return a.rolling(window=n).corr(b)
+        result = a.rolling(window=n).corr(b)
+        return result.replace([np.inf, -np.inf], np.nan)
 
     def _ts_rank(self, s, n):
         def func(x):
@@ -63,7 +64,8 @@ class Alpha191:
         return np.sign(s)
 
     def _cov(self, a, b, n):
-        return a.rolling(window=n).cov(b)
+        result = a.rolling(window=n).cov(b)
+        return result.replace([np.inf, -np.inf], np.nan)
 
     def _prod(self, s, n):
         return s.rolling(window=n).apply(lambda x: np.prod(x), raw=False)

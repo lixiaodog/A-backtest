@@ -1,0 +1,117 @@
+{
+  "strategies": [
+    {
+      "id": "rsi_strategy",
+      "name": "RSI策略",
+      "description": "RSI超卖时买入，超买时卖出",
+      "file": "rsi_strategy.py",
+      "params": [
+        {
+          "name": "rsi_period",
+          "default": 14,
+          "description": "RSI计算周期，决定RSI指标的平滑程度",
+          "type": "int",
+          "min": 2,
+          "max": 50
+        },
+        {
+          "name": "oversold",
+          "default": 30,
+          "description": "超卖阈值，RSI低于此值时产生买入信号",
+          "type": "float",
+          "min": 10,
+          "max": 50
+        },
+        {
+          "name": "overbought",
+          "default": 70,
+          "description": "超买阈值，RSI高于此值时产生卖出信号",
+          "type": "float",
+          "min": 50,
+          "max": 90
+        }
+      ]
+    },
+    {
+      "id": "macd_strategy",
+      "name": "MACD策略",
+      "description": "MACD金叉买入，死叉卖出",
+      "file": "macd_strategy.py",
+      "params": [
+        {
+          "name": "fast_period",
+          "default": 12,
+          "description": "快线EMA周期",
+          "type": "int",
+          "min": 5,
+          "max": 30
+        },
+        {
+          "name": "slow_period",
+          "default": 26,
+          "description": "慢线EMA周期",
+          "type": "int",
+          "min": 15,
+          "max": 50
+        },
+        {
+          "name": "signal_period",
+          "default": 9,
+          "description": "Signal线平滑周期",
+          "type": "int",
+          "min": 5,
+          "max": 20
+        }
+      ]
+    },
+    {
+      "id": "sma_cross",
+      "name": "均线交叉策略",
+      "description": "短期均线上穿长期均线买入，下穿卖出",
+      "file": "sma_cross.py",
+      "params": [
+        {
+          "name": "fast_period",
+          "default": 10,
+          "description": "快速均线周期",
+          "type": "int",
+          "min": 3,
+          "max": 30
+        },
+        {
+          "name": "slow_period",
+          "default": 30,
+          "description": "慢速均线周期",
+          "type": "int",
+          "min": 10,
+          "max": 100
+        }
+      ]
+    },
+    {
+      "id": "momentum",
+      "name": "动量策略",
+      "description": "基于动量指标，当价格动量超过阈值时产生信号",
+      "file": "momentum.py",
+      "params": [
+        {
+          "name": "momentum_period",
+          "default": 12,
+          "description": "动量计算周期",
+          "type": "int",
+          "min": 5,
+          "max": 30
+        },
+        {
+          "name": "threshold",
+          "default": 0.02,
+          "description": "动量阈值，超过此值产生信号",
+          "type": "float",
+          "min": 0.001,
+          "max": 0.1
+        }
+      ]
+    }
+  ],
+  "custom_strategies": []
+}

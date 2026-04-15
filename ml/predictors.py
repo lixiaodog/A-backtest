@@ -13,36 +13,154 @@ class Predictor:
             return {0: '强烈卖出', 1: '轻度卖出', 2: '持有', 3: '轻度买入', 4: '强烈买入'}
         return {0: '卖出', 1: '持有', 2: '买入'}
 
-    def predict(self, df: pd.DataFrame, feature_names: list = None):
+    def _predict_classification(self, last_features):
+        if isinstance(self.model, dict):
+            all_probs = []
+            predictions = {}
+            for name, model in self.model.items():
+                pred = int(model.predict(last_features)[0])
+                probs = model.predict_proba(last_features)[0]
+                predictions[name] = pred
+                all_probs.append(probs)
+
+            avg_probs = np.mean(all_probs, axis=0)
+            prediction = int(np.round(np.mean(list(predictions.values()))))
+
+            signal_map = self._get_signal_map()
+            signal = signal_map.get(prediction, '持有')
+            confidence = float(max(avg_probs))
+
+            prob_dict = {}
+            for i, prob in enumerate(avg_probs):
+                prob_dict[signal_map.get(i, str(i))] = float(prob)
+
+            return {
+                'signal': signal,
+                'confidence': confidence,
+                'probabilities': prob_dict,
+                'model_predictions': predictions
+            }
+        else:
+            prediction = self.model.predict(last_features)[0]
+            probabilities = self.model.predict_proba(last_features)[0]
+
+            signal_map = self._get_signal_map()
+            signal = signal_map.get(prediction, '持有')
+
+            confidence = float(max(probabilities))
+
+            prob_dict = {}
+            for i, prob in enumerate(probabilities):
+                prob_dict[signal_map.get(i, str(i))] = float(prob)
+
+            return {
+                'signal': signal,
+                'confidence': confidence,
+                'probabilities': prob_dict
+            }
+
+    def _predict_regression(self, last_features, threshold=0.02):
+        if isinstance(self.model, dict):
+            predictions = {}
+            for name, model in self.model.items():
+                predictions[name] = float(model.predict(last_features)[0])
+
+            pred_values = list(predictions.values())
+            mean_pred = np.mean(pred_values)
+            std_pred = np.std(pred_values)
+
+            max_diff = 0.05
+            confidence = max(0, min(1, 1 - std_pred / max_diff))
+
+            if mean_pred > threshold:
+                signal = '买入'
+            elif mean_pred < -threshold:
+                signal = '卖出'
+            else:
+                signal = '持有'
+
+            return {
+                'signal': signal,
+                'confidence': confidence,
+                'predicted_return': mean_pred,
+                'model_predictions': predictions,
+                'std': std_pred
+            }
+        else:
+            pred = float(self.model.predict(last_features)[0])
+
+            if pred > threshold:
+                signal = '买入'
+            elif pred < -threshold:
+                signal = '卖出'
+            else:
+                signal = '持有'
+
+            return {
+                'signal': signal,
+                'confidence': None,
+                'predicted_return': pred
+            }
+
+    def predict(self, df: pd.DataFrame, feature_names: list = None, threshold=0.02):
         features = self.feature_engineer.calculate_features(df, feature_names)
         if len(features) == 0:
             return None
 
         last_features = features.iloc[-1:]
 
-        prediction = self.model.predict(last_features)[0]
-        probabilities = self.model.predict_proba(last_features)[0]
+        if self.label_type == 'regression':
+            return self._predict_regression(last_features, threshold)
 
-        signal_map = self._get_signal_map()
-        signal = signal_map.get(prediction, '持有')
+        return self._predict_classification(last_features)
 
-        confidence = float(max(probabilities))
-
-        prob_dict = {}
-        for i, prob in enumerate(probabilities):
-            prob_dict[signal_map.get(i, str(i))] = float(prob)
-
-        return {
-            'signal': signal,
-            'confidence': confidence,
-            'probabilities': prob_dict,
-            'label_type': self.label_type
-        }
-
-    def predict_batch(self, df: pd.DataFrame, feature_names: list = None):
+    def predict_batch(self, df: pd.DataFrame, feature_names: list = None, threshold=0.02):
         features = self.feature_engineer.calculate_features(df, feature_names)
         if len(features) == 0:
             return None
+
+        if self.label_type == 'regression':
+            if isinstance(self.model, dict):
+                predictions = {}
+                for name, m in self.model.items():
+                    predictions[name] = m.predict(features).tolist()
+
+                pred_array = np.array(list(predictions.values()))
+                mean_preds = np.mean(pred_array, axis=0)
+                std_preds = np.std(pred_array, axis=0)
+
+                signals = []
+                for pred in mean_preds:
+                    if pred > threshold:
+                        signals.append('买入')
+                    elif pred < -threshold:
+                        signals.append('卖出')
+                    else:
+                        signals.append('持有')
+
+                return {
+                    'signals': signals,
+                    'predicted_returns': mean_preds.tolist(),
+                    'model_predictions': predictions,
+                    'stds': std_preds.tolist(),
+                    'dates': features.index.tolist()
+                }
+            else:
+                preds = self.model.predict(features)
+                signals = []
+                for pred in preds:
+                    if pred > threshold:
+                        signals.append('买入')
+                    elif pred < -threshold:
+                        signals.append('卖出')
+                    else:
+                        signals.append('持有')
+
+                return {
+                    'signals': signals,
+                    'predicted_returns': preds.tolist(),
+                    'dates': features.index.tolist()
+                }
 
         predictions = self.model.predict(features)
         probabilities = self.model.predict_proba(features)

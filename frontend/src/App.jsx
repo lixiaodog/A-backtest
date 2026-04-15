@@ -7,6 +7,7 @@ import TradeViewChart from './components/TradeViewChart'
 import TradeHistory from './components/TradeHistory'
 import LogOutput from './components/LogOutput'
 import MLPanel from './components/MLPanel'
+import StrategyManager from './components/StrategyManager'
 
 const { Header, Content } = Layout
 const { Title } = Typography
@@ -232,8 +233,14 @@ function App() {
   return (
     <Layout style={{ minHeight: '100vh', background: '#0a0a1a' }}>
       <Header style={{ background: '#1a1a2e', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Title level={4} style={{ color: '#fff', margin: 0 }}>A股量化系统</Title>
+        <Title level={4} style={{ color: '#fff', margin: 0 }}>天元智算</Title>
         <div style={{ display: 'flex', gap: 8 }}>
+          <Button
+            type={activeModule === 'strategy' ? 'primary' : 'default'}
+            onClick={() => setActiveModule('strategy')}
+          >
+            策略管理器
+          </Button>
           <Button
             type={activeModule === 'backtest' ? 'primary' : 'default'}
             onClick={() => setActiveModule('backtest')}
@@ -249,7 +256,13 @@ function App() {
         </div>
       </Header>
       <Content style={{ padding: 12, background: '#0a0a1a' }}>
-        {activeModule === 'backtest' ? (
+        {activeModule === 'strategy' ? (
+          <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
+            <Col span={24} style={{ height: '100%' }}>
+              <StrategyManager />
+            </Col>
+          </Row>
+        ) : activeModule === 'backtest' ? (
           <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
             <Col span={17} style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
               <div style={{ height: 360, background: '#1a1a2e', borderRadius: 4, position: 'relative' }}>

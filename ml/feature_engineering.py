@@ -76,6 +76,7 @@ class FeatureEngineer:
         self._scaler_fitted = True
 
     def _compute_features(self, df: pd.DataFrame, feature_names: list) -> pd.DataFrame:
+        import sys
         result = pd.DataFrame(index=df.index)
         alpha_features = []
         technical_features = []
@@ -86,14 +87,24 @@ class FeatureEngineer:
             elif name in self.available_features:
                 technical_features.append(name)
 
-        for name in technical_features:
+        print(f'[特征工程] 计算技术指标: {len(technical_features)} 个')
+        sys.stdout.flush()
+
+        for i, name in enumerate(technical_features):
             result[name] = self.available_features[name](df)
+            if (i + 1) % 5 == 0 or i == len(technical_features) - 1:
+                print(f'[特征工程] 技术指标进度: {i+1}/{len(technical_features)}')
+                sys.stdout.flush()
 
         if alpha_features:
+            print(f'[特征工程] 计算Alpha191因子: {len(alpha_features)} 个')
+            sys.stdout.flush()
             alpha_df = self._alpha191.get_all_alphas(df)
             for name in alpha_features:
                 if name in alpha_df.columns:
                     result[name] = alpha_df[name]
+            print(f'[特征工程] Alpha191因子计算完成')
+            sys.stdout.flush()
 
         result = result.replace([np.inf, -np.inf], np.nan)
         result = result.dropna()
@@ -103,14 +114,24 @@ class FeatureEngineer:
         return result
 
     def fit_transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+        import sys
         if feature_names is None:
             feature_names = self.get_available_features()
 
+        print(f'[特征工程] 开始计算 {len(feature_names)} 个特征...')
+        sys.stdout.flush()
+
         result = self._compute_features(df, feature_names)
+
+        print(f'[特征工程] 特征计算完成, 开始标准化...')
+        sys.stdout.flush()
 
         scaled_values = self._scaler.fit_transform(result)
         self._scaler_fitted = True
         result = pd.DataFrame(scaled_values, index=result.index, columns=result.columns)
+
+        print(f'[特征工程] 标准化完成, 最终形状: {result.shape}')
+        sys.stdout.flush()
 
         return result
 
@@ -154,7 +175,14 @@ class FeatureEngineer:
         return labels
 
     def generate_labels_multi(self, df: pd.DataFrame, horizon: int = 5, lower_q: float = 0.1, mid_low_q: float = 0.3, mid_high_q: float = 0.7, upper_q: float = 0.9) -> pd.Series:
-        future_returns = df['close'].shift(-horizon) / df['close'] - 1
+        def calc_future_returns(group):
+            future = group['close'].shift(-horizon) / group['close'] - 1
+            return future
+
+        if 'stock_code' in df.columns:
+            future_returns = df.groupby('stock_code', group_keys=False).apply(calc_future_returns)
+        else:
+            future_returns = calc_future_returns(df)
 
         q_values = future_returns.quantile([lower_q, mid_low_q, mid_high_q, upper_q])
         q1, q2, q3, q4 = q_values[lower_q], q_values[mid_low_q], q_values[mid_high_q], q_values[upper_q]
@@ -193,8 +221,25 @@ class FeatureEngineer:
         return X, y
 
     def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9):
+        mid_low_q = lower_q + (upper_q - lower_q) / 3
+        mid_high_q = lower_q + 2 * (upper_q - lower_q) / 3
         features = self.fit_transform(df, feature_names)
-        labels = self.generate_labels_multi(df, horizon, lower_q, upper_q)
+        labels = self.generate_labels_multi(df, horizon, lower_q, mid_low_q, mid_high_q, upper_q)
+
+        aligned_labels = labels.loc[features.index]
+
+        valid_mask = ~aligned_labels.isna()
+        X = features.loc[valid_mask]
+        y = aligned_labels.loc[valid_mask]
+
+        return X, y
+
+    def generate_labels_regression(self, df: pd.DataFrame, horizon: int = 5) -> pd.Series:
+        return df['close'].shift(-horizon) / df['close'] - 1
+
+    def prepare_data_regression(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5):
+        features = self.fit_transform(df, feature_names)
+        labels = self.generate_labels_regression(df, horizon)
 
         aligned_labels = labels.loc[features.index]
 
