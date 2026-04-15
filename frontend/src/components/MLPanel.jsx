@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, Input, Switch } from 'antd'
-import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined } from '@ant-design/icons'
+import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, StopOutlined } from '@ant-design/icons'
 import axios from 'axios'
 
 function MLPanel() {
@@ -11,6 +11,7 @@ function MLPanel() {
   const [stocks, setStocks] = useState([])
   const [loading, setLoading] = useState(false)
   const [training, setTraining] = useState(false)
+  const [currentTaskId, setCurrentTaskId] = useState(null)
   const [progress, setProgress] = useState(0)
   const [models, setModels] = useState([])
   const [technicalFeatures, setTechnicalFeatures] = useState([])
@@ -133,6 +134,18 @@ function MLPanel() {
     form.setFieldsValue({ features: [] })
   }
 
+  const handleStopTraining = async () => {
+    if (!currentTaskId) return
+    try {
+      await axios.post(`http://localhost:5000/api/ml/train/stop/${currentTaskId}`)
+      message.success('训练任务已停止')
+    } catch (e) {
+      message.error('停止训练失败: ' + (e.message || '未知错误'))
+    }
+    setTraining(false)
+    setCurrentTaskId(null)
+  }
+
   const handleTrain = async (values) => {
     if (selectedFeatures.length === 0) {
       message.error('请至少选择一个特征')
@@ -189,9 +202,10 @@ function MLPanel() {
       })
 
       const taskId = res.data.task_id
+      setCurrentTaskId(taskId)
       setTrainingLogs(prev => prev.map(log =>
         log.id === logEntry.id
-          ? { ...log, status: '训练中', model_id: res.data.models ? res.data.models[0]?.id : res.data.model?.id }
+          ? { ...log, status: '训练中', task_id: taskId }
           : log
       ))
 
@@ -200,30 +214,43 @@ function MLPanel() {
           const progressRes = await axios.get(`http://localhost:5000/api/ml/train/progress/${taskId}`)
           if (progressRes.data.status === 'unknown') {
             clearInterval(pollProgress)
+            setTrainingLogs(prev => prev.map(log =>
+              log.id === logEntry.id
+                ? { ...log, status: '失败: 任务未找到' }
+                : log
+            ))
+            setTraining(false)
             return
           }
+          const prog = progressRes.data.progress || 0
+          const status = progressRes.data.status || '训练中'
           setTrainingLogs(prev => prev.map(log =>
             log.id === logEntry.id
-              ? { ...log, progress: progressRes.data.progress || 0, status: progressRes.data.status || '训练中', message: progressRes.data.message || '' }
+              ? { ...log, progress: prog, status: status, message: progressRes.data.message || '' }
               : log
           ))
-          setProgress(progressRes.data.progress || 0)
-          if (progressRes.data.progress >= 100) {
+          setProgress(prog)
+          if (prog >= 100) {
             clearInterval(pollProgress)
+            setTrainingLogs(prev => prev.map(log =>
+              log.id === logEntry.id
+                ? { ...log, status: '完成', progress: 100 }
+                : log
+            ))
+            message.success('训练完成!')
+            loadModels()
+            setTraining(false)
           }
         } catch (e) {
           clearInterval(pollProgress)
+          setTrainingLogs(prev => prev.map(log =>
+            log.id === logEntry.id
+              ? { ...log, status: '失败: ' + e.message }
+              : log
+          ))
+          setTraining(false)
         }
       }, 1000)
-
-      setTrainingLogs(prev => prev.map(log =>
-        log.id === logEntry.id
-          ? { ...log, status: '完成', model_id: res.data.models ? res.data.models[0]?.id : res.data.model?.id }
-          : log
-      ))
-      message.success(values.useEnsemble ? `训练完成！共${res.data.models?.length || 0}个子模型` : '训练完成!')
-      loadModels()
-      setProgress(100)
     } catch (err) {
       setTrainingLogs(prev => prev.map(log =>
         log.id === logEntry.id
@@ -231,7 +258,6 @@ function MLPanel() {
           : log
       ))
       message.error('训练失败: ' + (err.response?.data?.error || err.message || '未知错误'))
-    } finally {
       setTraining(false)
     }
   }
@@ -340,7 +366,6 @@ function MLPanel() {
         <div style={{ color: '#888', marginBottom: 8 }}>
           预测结果
           {result.label_type === 'multi' && <Tag color="purple" size="small">5分类</Tag>}
-          {result.label_type === 'regression' && <Tag color="blue" size="small">回归</Tag>}
         </div>
 
         {isRegression ? (
@@ -425,7 +450,7 @@ function MLPanel() {
                     maxTagCount={3}
                   >
                     <Select.Option key="select_all" value="__SELECT_ALL__">全选</Select.Option>
-                    {stocks.map(s => (
+                    {(stocks || []).map(s => (
                       <Select.Option key={s} value={s}>{s}</Select.Option>
                     ))}
                   </Select>
@@ -437,13 +462,6 @@ function MLPanel() {
                   <Input style={{ flex: 1 }} placeholder="自动生成" />
                   <Button onClick={() => form.setFieldsValue({ modelName: generateModelName() })}>刷新</Button>
                 </Input.Group>
-              </Form.Item>
-
-              <Form.Item name="mode" label="训练模式" style={{ marginBottom: 8 }}>
-                <Select>
-                  <Select.Option value="classification">分类</Select.Option>
-                  <Select.Option value="regression">回归</Select.Option>
-                </Select>
               </Form.Item>
 
               <Form.Item name="useEnsemble" label="使用集成模型" valuePropName="checked" style={{ marginBottom: 8 }}>
@@ -537,11 +555,22 @@ function MLPanel() {
                 </Button>
               </div>
 
+              {training && trainingLogs.length > 0 && (
+                <div style={{ marginBottom: 8, fontSize: 12, color: '#888' }}>
+                  {trainingLogs[0].status} - {trainingLogs[0].message || '处理中...'}
+                </div>
+              )}
               {training && <Progress percent={progress} size="small" status="active" />}
 
-              <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} loading={training} style={{ width: '100%' }}>
-                开始训练
-              </Button>
+              {training ? (
+                <Button type="primary" danger icon={<StopOutlined />} onClick={handleStopTraining} style={{ width: '100%' }}>
+                  停止训练
+                </Button>
+              ) : (
+                <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />} style={{ width: '100%' }}>
+                  开始训练
+                </Button>
+              )}
             </Space>
           </Form>
         </Tabs.TabPane>
@@ -551,7 +580,7 @@ function MLPanel() {
             <Space direction="vertical" style={{ width: '100%' }}>
               <Form.Item name="base_model" label="基座模型" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
                 <Select placeholder="选择基座模型">
-                  {models.map(m => (
+                  {Array.isArray(models) && models.map(m => (
                     <Select.Option key={m.id} value={m.id}>
                       {m.model_name || m.stock}
                     </Select.Option>
@@ -561,7 +590,7 @@ function MLPanel() {
 
               <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ marginBottom: 0 }}>
                 <Select showSearch allowClear placeholder="选择股票">
-                  {stocks.map(s => (
+                  {(stocks || []).map(s => (
                     <Select.Option key={s} value={s}>{s}</Select.Option>
                   ))}
                 </Select>
@@ -612,7 +641,7 @@ function MLPanel() {
             <Space direction="vertical" style={{ width: '100%' }}>
               <Form.Item name="model_id" label="模型" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
                 <Select placeholder="选择模型">
-                  {models.map(m => (
+                  {Array.isArray(models) && models.map(m => (
                     <Select.Option key={m.id} value={m.id}>
                       {m.model_name || m.stock}
                     </Select.Option>
@@ -622,7 +651,7 @@ function MLPanel() {
 
               <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ marginBottom: 0 }}>
                 <Select showSearch allowClear placeholder="选择股票">
-                  {stocks.map(s => (
+                  {(stocks || []).map(s => (
                     <Select.Option key={s} value={s}>{s}</Select.Option>
                   ))}
                 </Select>
@@ -687,12 +716,6 @@ function MLPanel() {
             columns={[
               { title: '模型名称', dataIndex: 'model_name', width: 180, ellipsis: true },
               { title: '股票', dataIndex: 'stock_code', width: 80 },
-              {
-                title: '模式',
-                dataIndex: 'mode',
-                width: 60,
-                render: mode => mode === 'regression' ? <Tag color="blue">回归</Tag> : <Tag>分类</Tag>
-              },
               {
                 title: '集成',
                 dataIndex: 'is_ensemble',

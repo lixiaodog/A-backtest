@@ -131,6 +131,7 @@ watcher_thread.start()
 
 tasks = {}
 training_tasks = {}
+training_threads = {}
 
 backtest_tasks = tasks
 
@@ -283,6 +284,159 @@ def serve_chart(filename):
     results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'results')
     return send_from_directory(results_dir, filename)
 
+def _run_training_task(task_id, stock_list, market, period, model_name, start_date, end_date,
+                        model_type, features, horizon, threshold, label_type, vol_window,
+                        lower_q, upper_q, mode, use_ensemble, total_stocks, prepare_func):
+    """后台线程执行训练任务"""
+    from ml import ModelTrainer, ModelRegistry
+    from backend.pipeline import TrainingPipeline
+
+    trainer = ModelTrainer()
+    registry = ModelRegistry()
+
+    training_tasks[task_id] = {'progress': 5, 'status': '准备训练...',
+        'message': f'将按顺序处理 {total_stocks} 只股票，训练统一模型'}
+    print(f'[训练] 任务ID: {task_id} - 将按顺序处理 {total_stocks} 只股票')
+
+    pipeline = TrainingPipeline(
+        stock_list=stock_list,
+        task_id=task_id,
+        prepare_func=prepare_func,
+        features=features,
+        horizon=horizon,
+        threshold=threshold,
+        vol_window=vol_window,
+        lower_q=lower_q,
+        upper_q=upper_q,
+        start_date=start_date,
+        end_date=end_date,
+        period=period,
+        market=market,
+        mode=mode,
+        training_tasks=training_tasks,
+        progress_offset=5,
+        progress_scale=0.55
+    )
+
+    try:
+        pipeline_result = pipeline.run()
+    except Exception as e:
+        print(f'[训练] 任务ID: {task_id} - 管道执行失败: {e}')
+        traceback.print_exc()
+        if task_id in training_tasks:
+            training_tasks[task_id] = {'progress': 0, 'status': '失败', 'message': str(e)}
+        return
+
+    if not pipeline_result:
+        print(f'[训练] 任务ID: {task_id} - 没有足够的有效数据')
+        if task_id in training_tasks:
+            training_tasks[task_id] = {'progress': 0, 'status': '失败', 'message': '没有足够的有效数据，所有股票数据量都太少'}
+        return
+
+    all_X = pipeline_result['all_X']
+    all_y = pipeline_result['all_y']
+    stock_sample_counts = pipeline_result['stock_sample_counts']
+    scaler_params = pipeline_result['scaler_params']
+
+    if not all_X:
+        print(f'[训练] 任务ID: {task_id} - 没有足够的有效数据')
+        if task_id in training_tasks:
+            training_tasks[task_id] = {'progress': 0, 'status': '失败', 'message': '没有足够的有效数据'}
+        return
+
+    X = pd.concat(all_X, ignore_index=True)
+    y = pd.concat(all_y, ignore_index=True)
+
+    if task_id in training_tasks:
+        training_tasks[task_id] = {'progress': 65, 'status': '训练模型...',
+            'message': f'总样本数: {len(X)}，来自 {len(stock_sample_counts)} 只股票'}
+    print(f'[训练] 任务ID: {task_id} - 开始训练模型, 总样本数: {len(X)}, 股票样本分布: {stock_sample_counts}')
+
+    if use_ensemble:
+        print(f'[训练] 任务ID: {task_id} - 集成训练模式')
+        result = trainer.train_ensemble(X, y, mode=mode)
+        print(f'[训练] 任务ID: {task_id} - 集成训练完成, 指标: {result["test_metrics"]}')
+
+        training_tasks[task_id] = {'progress': 80, 'status': '保存模型...',
+            'message': '正在保存子模型'}
+        print(f'[训练] 任务ID: {task_id} - 正在保存子模型...')
+
+        base_name = model_name or f'unified_ensemble_{len(features)}f_{total_stocks}stocks'
+        trained_models = []
+        for i, model_key in enumerate(result['models'].keys()):
+            training_tasks[task_id] = {'progress': 85 + i*5, 'status': '保存模型...',
+                'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
+            print(f'[训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
+            model_obj = result['models'][model_key]
+            sub_filename = f'{base_name}_{model_key}.pkl'
+            sub_filepath = trainer.save_model(model_obj, sub_filename)
+            sub_metric = result['test_metrics'].get(model_key, {})
+            stock_display = f'{len(stock_sample_counts)}只股票'
+            sub_model_info = registry.register_model(
+                stock_code=stock_display,
+                model_name=f'{base_name}_{model_key}',
+                start_date=start_date,
+                end_date=end_date,
+                model_type=model_key,
+                features=features,
+                file_path=sub_filepath,
+                metrics=sub_metric,
+                scaler_params=scaler_params,
+                label_type=label_type,
+                horizon=horizon,
+                threshold=threshold,
+                vol_window=vol_window,
+                lower_q=lower_q,
+                upper_q=upper_q,
+                mode=mode,
+                is_ensemble=False
+            )
+            trained_models.append(sub_model_info)
+
+        training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+        print(f'[训练] 任务ID: {task_id} - 集成训练完成, 保存了{len(trained_models)}个子模型')
+    else:
+        print(f'[训练] 任务ID: {task_id} - 单模型训练模式, 模型: {model_type}')
+        result = trainer.train_with_split(X, y, model_type, mode=mode)
+        print(f'[训练] 任务ID: {task_id} - 模型训练完成, 指标: {result["test_metrics"]}')
+
+        training_tasks[task_id] = {'progress': 80, 'status': '保存模型...', 'message': '正在保存模型'}
+        print(f'[训练] 任务ID: {task_id} - 正在保存模型...')
+
+        stock_display = f'{len(stock_sample_counts)}只股票'
+        if not model_name:
+            if mode == 'regression':
+                main_metric = result['test_metrics']['r2']
+            else:
+                main_metric = result['test_metrics']['accuracy']
+            model_name = f'unified_{model_type}_{len(features)}f_{total_stocks}stocks_{main_metric:.2f}'
+
+        filename = f'{model_name}.pkl'
+        filepath = trainer.save_model(result['model'], filename)
+
+        model_info = registry.register_model(
+            stock_code=stock_display,
+            model_name=model_name,
+            start_date=start_date,
+            end_date=end_date,
+            model_type=model_type,
+            features=features,
+            file_path=filepath,
+            metrics=result['test_metrics'],
+            scaler_params=scaler_params,
+            label_type=label_type,
+            horizon=horizon,
+            threshold=threshold,
+            vol_window=vol_window,
+            lower_q=lower_q,
+            upper_q=upper_q,
+            mode=mode,
+            is_ensemble=False
+        )
+
+        training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+        print(f'[训练] 任务ID: {task_id} - 单模型训练完成, 模型已保存: {filename}')
+
 @app.route('/api/ml/train', methods=['POST'])
 def ml_train():
     task_id = uuid.uuid4().hex[:8]
@@ -310,19 +464,9 @@ def ml_train():
 
         print(f'[训练] 任务ID: {task_id} - 参数: stock={stock_param}, market={market}, period={period}, horizon={horizon}, use_ensemble={use_ensemble}')
 
-        from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
-
-        data_loader = MLDataLoader()
-        trainer = ModelTrainer()
-        registry = ModelRegistry()
-
         is_multiple_stocks = isinstance(stock_param, list)
         stock_list = stock_param if is_multiple_stocks else [stock_param]
         total_stocks = len(stock_list)
-
-        training_tasks[task_id] = {'progress': 5, 'status': '准备训练...',
-            'message': f'将按顺序处理 {total_stocks} 只股票，训练统一模型'}
-        print(f'[训练] 任务ID: {task_id} - 将按顺序处理 {total_stocks} 只股票')
 
         if label_type == 'regression' or mode == 'regression':
             prepare_func = 'prepare_data_regression'
@@ -334,176 +478,26 @@ def ml_train():
         else:
             prepare_func = 'prepare_data'
 
-        all_X = []
-        all_y = []
-        scaler_params = None
-        stock_sample_counts = {}
+        training_tasks[task_id] = {'progress': 5, 'status': '准备训练...',
+            'message': f'将按顺序处理 {total_stocks} 只股票，训练统一模型'}
+        print(f'[训练] 任务ID: {task_id} - 将按顺序处理 {total_stocks} 只股票')
 
-        for idx, stock_code in enumerate(stock_list):
-            stock_progress = int((idx / total_stocks) * 60)
-            training_tasks[task_id] = {
-                'progress': stock_progress,
-                'status': f'处理股票 ({idx + 1}/{total_stocks})',
-                'message': f'正在处理 {stock_code}，提取特征...'
-            }
-            print(f'[训练] 任务ID: {task_id} - 处理股票 {idx + 1}/{total_stocks}: {stock_code}')
+        thread = threading.Thread(
+            target=_run_training_task,
+            args=(task_id, stock_list, market, period, model_name, start_date, end_date,
+                  model_type, features, horizon, threshold, label_type, vol_window,
+                  lower_q, upper_q, mode, use_ensemble, total_stocks, prepare_func)
+        )
+        thread.daemon = True
+        training_threads[task_id] = thread
+        thread.start()
 
-            try:
-                raw_data = data_loader.load_stock_data(stock_code, start_date, end_date, period=period, market=market)
-            except FileNotFoundError:
-                print(f'[训练] 任务ID: {task_id} - 跳过不存在的股票: {stock_code}')
-                continue
+        return jsonify({
+            'status': 'started',
+            'task_id': task_id,
+            'message': '训练任务已启动'
+        })
 
-            if len(raw_data) < 100:
-                print(f'[训练] 任务ID: {task_id} - {stock_code} 原始数据量太少({len(raw_data)}条)，跳过')
-                continue
-
-            try:
-                feature_engineer = FeatureEngineer()
-
-                if prepare_func == 'prepare_data_regression':
-                    X, y = feature_engineer.prepare_data_regression(raw_data, features, horizon)
-                elif prepare_func == 'prepare_data_with_volatility':
-                    X, y = feature_engineer.prepare_data_with_volatility(raw_data, features, horizon, vol_window, lower_q, upper_q)
-                elif prepare_func == 'prepare_data_multi':
-                    X, y = feature_engineer.prepare_data_multi(raw_data, features, horizon, lower_q, upper_q)
-                else:
-                    X, y = feature_engineer.prepare_data(raw_data, features, horizon, threshold)
-
-                if len(X) < 50:
-                    print(f'[训练] 任务ID: {task_id} - {stock_code} 数据量太少({len(X)}条)，跳过')
-                    continue
-
-                stock_sample_counts[stock_code] = len(X)
-                scaler_params = feature_engineer.get_scaler_params()
-                all_X.append(X)
-                all_y.append(y)
-
-                print(f'[训练] 任务ID: {task_id} - {stock_code} 提取完成，样本数: {len(X)}')
-            except Exception as e:
-                print(f'[训练] 任务ID: {task_id} - {stock_code} 特征提取失败: {e}，跳过')
-                continue
-
-        if not all_X:
-            print(f'[训练] 任务ID: {task_id} - 没有足够的有效数据')
-            del training_tasks[task_id]
-            return jsonify({'error': '没有足够的有效数据，所有股票数据量都太少'}), 400
-
-        X = pd.concat(all_X, ignore_index=True)
-        y = pd.concat(all_y, ignore_index=True)
-
-        training_tasks[task_id] = {'progress': 60, 'status': '训练模型...',
-            'message': f'总样本数: {len(X)}，来自 {len(stock_sample_counts)} 只股票'}
-        print(f'[训练] 任务ID: {task_id} - 开始训练模型, 总样本数: {len(X)}, 股票样本分布: {stock_sample_counts}')
-
-        if use_ensemble:
-            print(f'[训练] 任务ID: {task_id} - 集成训练模式')
-            result = trainer.train_ensemble(X, y, mode=mode)
-            print(f'[训练] 任务ID: {task_id} - 集成训练完成, 指标: {result["test_metrics"]}')
-
-            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...',
-                'message': '正在保存子模型'}
-            print(f'[训练] 任务ID: {task_id} - 正在保存子模型...')
-
-            base_name = model_name or f'unified_ensemble_{len(features)}f_{total_stocks}stocks'
-            trained_models = []
-            for i, model_key in enumerate(result['models'].keys()):
-                training_tasks[task_id] = {'progress': 85 + i*5, 'status': '保存模型...',
-                    'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
-                print(f'[训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
-                model_obj = result['models'][model_key]
-                sub_filename = f'{base_name}_{model_key}.pkl'
-                sub_filepath = trainer.save_model(model_obj, sub_filename)
-                sub_metric = result['test_metrics'].get(model_key, {})
-                stock_display = f'{len(stock_sample_counts)}只股票'
-                sub_model_info = registry.register_model(
-                    stock_code=stock_display,
-                    model_name=f'{base_name}_{model_key}',
-                    start_date=start_date,
-                    end_date=end_date,
-                    model_type=model_key,
-                    features=features,
-                    file_path=sub_filepath,
-                    metrics=sub_metric,
-                    scaler_params=scaler_params,
-                    label_type=label_type,
-                    horizon=horizon,
-                    threshold=threshold,
-                    vol_window=vol_window,
-                    lower_q=lower_q,
-                    upper_q=upper_q,
-                    mode=mode,
-                    is_ensemble=False
-                )
-                trained_models.append(sub_model_info)
-
-            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
-            print(f'[训练] 任务ID: {task_id} - 集成训练完成, 保存了{len(trained_models)}个子模型')
-            del training_tasks[task_id]
-
-            return jsonify({
-                'status': 'trained',
-                'models': trained_models,
-                'metrics': result['test_metrics'],
-                'task_id': task_id,
-                'stock_sample_counts': stock_sample_counts
-            })
-        else:
-            print(f'[训练] 任务ID: {task_id} - 单模型训练模式, 模型: {model_type}')
-            result = trainer.train_with_split(X, y, model_type, mode=mode)
-            print(f'[训练] 任务ID: {task_id} - 模型训练完成, 指标: {result["test_metrics"]}')
-
-            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...', 'message': '正在保存模型'}
-            print(f'[训练] 任务_id: {task_id} - 正在保存模型...')
-
-            stock_display = f'{len(stock_sample_counts)}只股票'
-            if not model_name:
-                if mode == 'regression':
-                    main_metric = result['test_metrics']['r2']
-                else:
-                    main_metric = result['test_metrics']['accuracy']
-                model_name = f'unified_{model_type}_{len(features)}f_{total_stocks}stocks_{main_metric:.2f}'
-
-            filename = f'{model_name}.pkl'
-            filepath = trainer.save_model(result['model'], filename)
-
-            model_info = registry.register_model(
-                stock_code=stock_display,
-                model_name=model_name,
-                start_date=start_date,
-                end_date=end_date,
-                model_type=model_type,
-                features=features,
-                file_path=filepath,
-                metrics=result['test_metrics'],
-                scaler_params=scaler_params,
-                label_type=label_type,
-                horizon=horizon,
-                threshold=threshold,
-                vol_window=vol_window,
-                lower_q=lower_q,
-                upper_q=upper_q,
-                mode=mode,
-                is_ensemble=False
-            )
-
-            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
-            print(f'[训练] 任务ID: {task_id} - 单模型训练完成, 模型已保存: {filename}')
-            del training_tasks[task_id]
-
-            return jsonify({
-                'status': 'trained',
-                'model': model_info,
-                'metrics': result['test_metrics'],
-                'task_id': task_id,
-                'stock_sample_counts': stock_sample_counts
-            })
-
-    except FileNotFoundError as e:
-        print(f'[训练] 任务ID: {task_id} - 数据文件不存在: {e}')
-        if task_id in training_tasks:
-            del training_tasks[task_id]
-        return jsonify({'error': f'数据文件不存在: {str(e)}'}), 404
     except Exception as e:
         print(f'[训练] 任务ID: {task_id} - 训练失败: {e}')
         traceback.print_exc()
@@ -691,6 +685,20 @@ def ml_get_train_progress(task_id):
     if task_id in training_tasks:
         return jsonify(training_tasks[task_id])
     return jsonify({'progress': 0, 'status': 'unknown'})
+
+@app.route('/api/ml/train/stop/<task_id>', methods=['POST'])
+def ml_stop_train(task_id):
+    if task_id in training_threads:
+        thread = training_threads[task_id]
+        thread_id = thread.ident
+        import ctypes
+        import inspect
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, ctypes.py_object(SystemExit))
+        training_tasks[task_id] = {'progress': 0, 'status': '已停止', 'message': '用户手动停止'}
+        if task_id in training_threads:
+            del training_threads[task_id]
+        return jsonify({'status': 'stopped', 'task_id': task_id})
+    return jsonify({'status': 'not_found', 'message': '任务不存在'}), 404
 
 @app.route('/api/ml/features', methods=['GET'])
 def ml_get_features():

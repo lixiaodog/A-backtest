@@ -107,7 +107,9 @@ class FeatureEngineer:
             sys.stdout.flush()
 
         result = result.replace([np.inf, -np.inf], np.nan)
-        result = result.dropna()
+        min_valid = max(1, len(result.columns) // 2)
+        result = result.dropna(thresh=min_valid)
+        result = result.ffill().bfill()
         result = result.astype(np.float32)
         result = result.clip(-1e10, 1e10)
 
@@ -117,6 +119,10 @@ class FeatureEngineer:
         import sys
         if feature_names is None:
             feature_names = self.get_available_features()
+
+        if len(feature_names) == 0:
+            feature_names = self.get_alpha191_features()
+            print(f'[特征工程] 未指定特征，使用Alpha191: {len(feature_names)} 个')
 
         print(f'[特征工程] 开始计算 {len(feature_names)} 个特征...')
         sys.stdout.flush()
