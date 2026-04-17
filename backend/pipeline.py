@@ -87,17 +87,17 @@ class TrainingPipeline:
                 feature_engineer = FeatureEngineer()
 
                 if self.prepare_func == 'prepare_data_regression':
-                    X, y = feature_engineer.prepare_data_regression(raw_data, self.features, self.horizon)
+                    X, y = feature_engineer.prepare_data_regression(raw_data, self.features, self.horizon, normalize=False)
                 elif self.prepare_func == 'prepare_data_with_volatility':
                     X, y = feature_engineer.prepare_data_with_volatility(
-                        raw_data, self.features, self.horizon, self.vol_window, self.lower_q, self.upper_q
+                        raw_data, self.features, self.horizon, self.vol_window, self.lower_q, self.upper_q, normalize=False
                     )
                 elif self.prepare_func == 'prepare_data_multi':
                     X, y = feature_engineer.prepare_data_multi(
-                        raw_data, self.features, self.horizon, self.lower_q, self.upper_q
+                        raw_data, self.features, self.horizon, self.lower_q, self.upper_q, normalize=False
                     )
                 else:
-                    X, y = feature_engineer.prepare_data(raw_data, self.features, self.horizon, self.threshold)
+                    X, y = feature_engineer.prepare_data(raw_data, self.features, self.horizon, self.threshold, normalize=False)
 
                 if len(X) < 50:
                     print(f'[线程2-{worker_id}] {stock_code} 特征数据量太少({len(X)}条)，跳过')
@@ -130,6 +130,8 @@ class TrainingPipeline:
         print(f'[线程2-{worker_id}] 特征生成完成，共处理 {processed} 只股票')
 
     def thread3_trainer(self):
+        from ml.feature_engineering import FeatureEngineer
+
         collected = 0
         while not (self.feature_queue.empty() and self.feature_done_event.is_set()):
             try:
@@ -160,12 +162,24 @@ class TrainingPipeline:
             self.training_result = None
             return
 
-        print(f'[线程3] 数据收集完成，共 {len(self.all_X)} 只股票')
+        print(f'[线程3] 数据收集完成，共 {len(self.all_X)} 只股票，开始统一归一化...')
+        import pandas as pd
+        combined_X = pd.concat(self.all_X, ignore_index=True)
+        combined_y = pd.concat(self.all_y, ignore_index=True)
+
+        scaler = FeatureEngineer()
+        combined_X_scaled = scaler._normalize(combined_X)
+        scaler_params = scaler.get_scaler_params()
+
+        self.all_X = [combined_X_scaled]
+        self.all_y = [combined_y]
+
+        print(f'[线程3] 统一归一化完成，最终样本数: {len(combined_X_scaled)}')
         self.training_result = {
             'all_X': self.all_X,
             'all_y': self.all_y,
-            'stock_sample_counts': self.stock_sample_counts,
-            'scaler_params': None
+            'stock_sample_counts': {'统一数据': len(combined_X_scaled)},
+            'scaler_params': scaler_params
         }
 
     def run(self):

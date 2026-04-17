@@ -51,8 +51,7 @@ def _process_single_stock(args):
             'stock_code': stock_code,
             'X': X,
             'y': y,
-            'sample_count': len(X),
-            'scaler_params': feature_engineer.get_scaler_params()
+            'sample_count': len(X)
         }
 
     except Exception as e:
@@ -61,16 +60,23 @@ def _process_single_stock(args):
 
 
 def parallel_train(stock_list, params, task_id=None, training_tasks=None):
+    """多进程训练 - 在后台线程中完成整个训练流程"""
+    from ml import ModelTrainer, ModelRegistry
+
+    trainer = ModelTrainer()
+    registry = ModelRegistry()
+
+    total_stocks = len(stock_list)
+
     if task_id and training_tasks:
         training_tasks[task_id] = {
-            'progress': 10,
-            'status': '并行加载数据...',
-            'message': f'使用 {min(4, len(stock_list))} 个进程处理 {len(stock_list)} 只股票'
+            'progress': 5,
+            'status': '并行处理...',
+            'message': f'使用多进程处理 {total_stocks} 只股票'
         }
         print(f'[多进程训练] 任务ID: {task_id} - 启动多进程处理')
 
     start_time = time.time()
-
     tasks = [(stock, params) for stock in stock_list]
 
     cpu_count = os.cpu_count() or 4
@@ -80,21 +86,17 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     completed = [0]
     total = len(tasks)
 
-    def update_progress(completed_count):
-        if task_id and training_tasks:
-            progress = int(10 + (completed_count / total) * 50)
-            training_tasks[task_id] = {
-                'progress': progress,
-                'status': f'并行处理 ({completed_count}/{total})',
-                'message': f'已处理 {completed_count} 只股票'
-            }
-
-    start_time = time.time()
     results = []
     with Pool(processes=num_processes) as pool:
         for result in pool.imap_unordered(_process_single_stock, tasks):
             completed[0] += 1
-            update_progress(completed[0])
+            if task_id and training_tasks:
+                progress = int(5 + (completed[0] / total) * 50)
+                training_tasks[task_id] = {
+                    'progress': progress,
+                    'status': f'并行处理 ({completed[0]}/{total})',
+                    'message': f'已处理 {completed[0]} 只股票'
+                }
             results.append(result)
 
     process_time = time.time() - start_time
@@ -103,21 +105,25 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     all_X = []
     all_y = []
     stock_sample_counts = {}
-    scaler_params = None
 
     for result in results:
         if result:
             stock_sample_counts[result['stock_code']] = result['sample_count']
-            scaler_params = result['scaler_params']
             all_X.append(result['X'])
             all_y.append(result['y'])
 
     if not all_X:
-        return None
+        if task_id and training_tasks:
+            training_tasks[task_id] = {
+                'progress': 0,
+                'status': '失败',
+                'message': '没有足够的有效数据'
+            }
+        return
 
     if task_id and training_tasks:
         training_tasks[task_id] = {
-            'progress': 60,
+            'progress': 55,
             'status': '合并数据...',
             'message': f'成功处理 {len(all_X)} 只股票，合并特征数据'
         }
@@ -130,14 +136,124 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     print(f'[多进程训练] 数据合并完成，总样本: {total_samples}，总耗时: {total_time:.2f}秒')
     print(f'[多进程训练] 股票样本分布: {stock_sample_counts}')
 
-    return {
-        'X': X,
-        'y': y,
-        'stock_sample_counts': stock_sample_counts,
-        'scaler_params': scaler_params,
-        'process_time': process_time,
-        'total_time': total_time
-    }
+    mode = params.get('mode', 'classification')
+    use_ensemble = params.get('use_ensemble', False)
+    model_type = params.get('model_type', 'RandomForest')
+    model_name = params.get('model_name')
+    features = params.get('features', [])
+    start_date = params.get('start_date')
+    end_date = params.get('end_date')
+    horizon = params.get('horizon', 5)
+    threshold = params.get('threshold', 0.02)
+    label_type = params.get('label_type', 'fixed')
+    vol_window = params.get('vol_window', 20)
+    lower_q = params.get('lower_q', 0.2)
+    upper_q = params.get('upper_q', 0.8)
+
+    if task_id and training_tasks:
+        training_tasks[task_id] = {
+            'progress': 65,
+            'status': '训练模型...',
+            'message': f'总样本数: {total_samples}，来自 {len(stock_sample_counts)} 只股票'
+        }
+
+    if use_ensemble:
+        print(f'[多进程训练] 任务ID: {task_id} - 集成训练模式')
+        result = trainer.train_ensemble(X, y, mode=mode)
+        print(f'[多进程训练] 任务ID: {task_id} - 集成训练完成, 指标: {result["test_metrics"]}')
+
+        if task_id and training_tasks:
+            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...',
+                'message': '正在保存子模型'}
+
+        import uuid
+        model_id = str(uuid.uuid4())[:8]
+        parent_id = str(uuid.uuid4())
+        stock_display = f'{len(stock_sample_counts)}只股票'
+        base_name = model_name or f'{params["market"]}_{params["period"]}_ENS_{len(features)}f_{params["horizon"]}h_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks'
+        trained_models = []
+        for i, model_key in enumerate(result['models'].keys()):
+            if task_id and training_tasks:
+                training_tasks[task_id] = {'progress': 85 + i*5, 'status': '保存模型...',
+                    'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
+            print(f'[多进程训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
+            model_obj = result['models'][model_key]
+            sub_filename = f'{base_name}_{model_key}_{model_id}_{i}.pkl'
+            sub_filepath = trainer.save_model(model_obj, sub_filename)
+            sub_metric = result['test_metrics'].get(model_key, {})
+            sub_model_info = registry.register_model(
+                stock_code=stock_display,
+                model_name=sub_filename.replace('.pkl', ''),
+                start_date=start_date,
+                end_date=end_date,
+                model_type=model_key,
+                features=features,
+                file_path=sub_filepath,
+                metrics=sub_metric,
+                scaler_params=None,
+                label_type=label_type,
+                horizon=horizon,
+                threshold=threshold,
+                vol_window=vol_window,
+                lower_q=lower_q,
+                upper_q=upper_q,
+                mode=mode,
+                is_ensemble=True,
+                parent_model_id=parent_id
+            )
+            trained_models.append(sub_model_info)
+
+        if task_id and training_tasks:
+            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+        print(f'[多进程训练] 任务ID: {task_id} - 集成训练完成, 保存了{len(trained_models)}个子模型')
+
+    else:
+        print(f'[多进程训练] 任务ID: {task_id} - 单模型训练模式, 模型: {model_type}')
+        result = trainer.train_with_split(X, y, model_type, mode=mode)
+        print(f'[多进程训练] 任务ID: {task_id} - 模型训练完成, 指标: {result["test_metrics"]}')
+
+        if task_id and training_tasks:
+            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...', 'message': '正在保存模型'}
+
+        import uuid
+        model_id = str(uuid.uuid4())[:8]
+        stock_display = f'{len(stock_sample_counts)}只股票'
+        if not model_name:
+            if mode == 'regression':
+                main_metric = result['test_metrics']['r2']
+            else:
+                main_metric = result['test_metrics']['accuracy']
+            model_name = f'{params["market"]}_{params["period"]}_{model_type}_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks_{main_metric:.2f}'
+            model_name = f'{model_name}_{model_id}'
+
+        filename = f'{model_name}.pkl'
+        filepath = trainer.save_model(result['model'], filename)
+
+        model_info = registry.register_model(
+            stock_code=stock_display,
+            model_name=model_name,
+            start_date=start_date,
+            end_date=end_date,
+            model_type=model_type,
+            features=features,
+            file_path=filepath,
+            metrics=result['test_metrics'],
+            scaler_params=None,
+            label_type=label_type,
+            horizon=horizon,
+            threshold=threshold,
+            vol_window=vol_window,
+            lower_q=lower_q,
+            upper_q=upper_q,
+            mode=mode,
+            is_ensemble=False
+        )
+
+        if task_id and training_tasks:
+            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+        print(f'[多进程训练] 任务ID: {task_id} - 单模型训练完成, 模型已保存: {filename}')
+
+    print(f'[多进程训练] 任务ID: {task_id} - 全部完成，总耗时: {time.time() - start_time:.2f}秒')
 
 
 if __name__ == '__main__':
@@ -163,9 +279,4 @@ if __name__ == '__main__':
     print('多进程训练测试')
     print('=' * 50)
 
-    result = parallel_train(stock_list, params)
-    if result:
-        print(f'成功处理 {len(result["stock_sample_counts"])} 只股票')
-        print(f'总样本: {len(result["X"])}')
-        print(f'处理耗时: {result["process_time"]:.2f}秒')
-        print(f'总耗时: {result["total_time"]:.2f}秒')
+    parallel_train(stock_list, params)

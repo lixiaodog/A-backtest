@@ -29,6 +29,8 @@ class Predictor:
             signal_map = self._get_signal_map()
             signal = signal_map.get(prediction, '持有')
             confidence = float(max(avg_probs))
+            if np.isnan(confidence):
+                confidence = None
 
             prob_dict = {}
             for i, prob in enumerate(avg_probs):
@@ -48,6 +50,8 @@ class Predictor:
             signal = signal_map.get(prediction, '持有')
 
             confidence = float(max(probabilities))
+            if np.isnan(confidence):
+                confidence = None
 
             prob_dict = {}
             for i, prob in enumerate(probabilities):
@@ -70,7 +74,9 @@ class Predictor:
             std_pred = np.std(pred_values)
 
             max_diff = 0.05
-            confidence = max(0, min(1, 1 - std_pred / max_diff))
+            confidence = max(0, min(1, 1 - std_pred / max_diff)) if max_diff > 0 else None
+            if confidence is not None and np.isnan(confidence):
+                confidence = None
 
             if mean_pred > threshold:
                 signal = '买入'
@@ -108,6 +114,8 @@ class Predictor:
             return None
 
         last_features = features.iloc[-1:]
+        if last_features.isna().any().any():
+            return None
 
         if self.label_type == 'regression':
             return self._predict_regression(last_features, threshold)

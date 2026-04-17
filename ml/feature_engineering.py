@@ -80,9 +80,12 @@ class FeatureEngineer:
         result = pd.DataFrame(index=df.index)
         alpha_features = []
         technical_features = []
+        use_all_alpha = False
 
         for name in feature_names:
-            if name in self._alpha191_features:
+            if name == 'alpha191' or name == 'all_alpha':
+                use_all_alpha = True
+            elif name in self._alpha191_features:
                 alpha_features.append(name)
             elif name in self.available_features:
                 technical_features.append(name)
@@ -96,20 +99,25 @@ class FeatureEngineer:
                 print(f'[特征工程] 技术指标进度: {i+1}/{len(technical_features)}')
                 sys.stdout.flush()
 
-        if alpha_features:
-            print(f'[特征工程] 计算Alpha191因子: {len(alpha_features)} 个')
-            sys.stdout.flush()
+        if alpha_features or use_all_alpha:
             alpha_df = self._alpha191.get_all_alphas(df)
-            for name in alpha_features:
-                if name in alpha_df.columns:
-                    result[name] = alpha_df[name]
-            print(f'[特征工程] Alpha191因子计算完成')
+            if use_all_alpha:
+                for col in alpha_df.columns:
+                    if col not in result.columns:
+                        result[col] = alpha_df[col]
+                print(f'[特征工程] 计算全部Alpha191因子: {len(alpha_df.columns)} 个')
+            else:
+                for name in alpha_features:
+                    if name in alpha_df.columns:
+                        result[name] = alpha_df[name]
+                print(f'[特征工程] 计算Alpha191因子: {len(alpha_features)} 个')
             sys.stdout.flush()
 
         result = result.replace([np.inf, -np.inf], np.nan)
-        min_valid = max(1, len(result.columns) // 2)
-        result = result.dropna(thresh=min_valid)
         result = result.ffill().bfill()
+        if result.iloc[-1].isna().any():
+            result = result.ffill().bfill()
+        result = result.fillna(0)
         result = result.astype(np.float32)
         result = result.clip(-1e10, 1e10)
 
@@ -129,6 +137,10 @@ class FeatureEngineer:
 
         result = self._compute_features(df, feature_names)
 
+        if result.empty or result.shape[1] == 0:
+            print(f'[特征工程] 没有有效特征数据，跳过标准化')
+            return result
+
         print(f'[特征工程] 特征计算完成, 开始标准化...')
         sys.stdout.flush()
 
@@ -141,11 +153,38 @@ class FeatureEngineer:
 
         return result
 
+    def compute_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+        import sys
+        if feature_names is None:
+            feature_names = self.get_available_features()
+
+        if len(feature_names) == 0:
+            feature_names = self.get_alpha191_features()
+            print(f'[特征工程] 未指定特征，使用Alpha191: {len(feature_names)} 个')
+
+        print(f'[特征工程] 开始计算 {len(feature_names)} 个特征（不归一化）...')
+        sys.stdout.flush()
+
+        result = self._compute_features(df, feature_names)
+
+        if result.empty or result.shape[1] == 0:
+            print(f'[特征工程] 没有有效特征数据')
+            return result
+
+        print(f'[特征工程] 特征计算完成, 最终形状: {result.shape}')
+        sys.stdout.flush()
+
+        return result
+
     def transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
         if feature_names is None:
             feature_names = self.get_available_features()
 
         result = self._compute_features(df, feature_names)
+
+        if result.empty or result.shape[1] == 0:
+            print(f'[特征工程] 没有有效特征数据')
+            return result
 
         if self._scaler_fitted:
             scaled_values = self._scaler.transform(result)
@@ -202,56 +241,79 @@ class FeatureEngineer:
 
         return labels
 
-    def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02):
-        features = self.fit_transform(df, feature_names)
+    def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02, normalize: bool = True):
+        features = self.compute_features(df, feature_names)
         labels = self.generate_labels(df, horizon, threshold)
 
         aligned_labels = labels.loc[features.index]
 
-        valid_mask = ~aligned_labels.isna()
+        valid_mask = ~(aligned_labels.isna() | features.isna().any(axis=1))
         X = features.loc[valid_mask]
         y = aligned_labels.loc[valid_mask]
 
+        if normalize:
+            X = self._normalize(X)
+            self._scaler_fitted = True
+
         return X, y
 
-    def prepare_data_with_volatility(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8):
-        features = self.fit_transform(df, feature_names)
+    def _normalize(self, X: pd.DataFrame) -> pd.DataFrame:
+        if X.empty or X.shape[1] == 0:
+            return X
+        scaled_values = self._scaler.fit_transform(X)
+        self._scaler_fitted = True
+        return pd.DataFrame(scaled_values, index=X.index, columns=X.columns)
+
+    def prepare_data_with_volatility(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8, normalize: bool = True):
+        features = self.compute_features(df, feature_names)
         labels = self.generate_labels_by_volatility(df, horizon, vol_window, lower_q, upper_q)
 
         aligned_labels = labels.loc[features.index]
 
-        valid_mask = ~aligned_labels.isna()
+        valid_mask = ~(aligned_labels.isna() | features.isna().any(axis=1))
         X = features.loc[valid_mask]
         y = aligned_labels.loc[valid_mask]
 
+        if normalize:
+            X = self._normalize(X)
+            self._scaler_fitted = True
+
         return X, y
 
-    def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9):
+    def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9, normalize: bool = True):
         mid_low_q = lower_q + (upper_q - lower_q) / 3
         mid_high_q = lower_q + 2 * (upper_q - lower_q) / 3
-        features = self.fit_transform(df, feature_names)
+        features = self.compute_features(df, feature_names)
         labels = self.generate_labels_multi(df, horizon, lower_q, mid_low_q, mid_high_q, upper_q)
 
         aligned_labels = labels.loc[features.index]
 
-        valid_mask = ~aligned_labels.isna()
+        valid_mask = ~(aligned_labels.isna() | features.isna().any(axis=1))
         X = features.loc[valid_mask]
         y = aligned_labels.loc[valid_mask]
+
+        if normalize:
+            X = self._normalize(X)
+            self._scaler_fitted = True
 
         return X, y
 
     def generate_labels_regression(self, df: pd.DataFrame, horizon: int = 5) -> pd.Series:
         return df['close'].shift(-horizon) / df['close'] - 1
 
-    def prepare_data_regression(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5):
-        features = self.fit_transform(df, feature_names)
+    def prepare_data_regression(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, normalize: bool = True):
+        features = self.compute_features(df, feature_names)
         labels = self.generate_labels_regression(df, horizon)
 
         aligned_labels = labels.loc[features.index]
 
-        valid_mask = ~aligned_labels.isna()
+        valid_mask = ~(aligned_labels.isna() | features.isna().any(axis=1))
         X = features.loc[valid_mask]
         y = aligned_labels.loc[valid_mask]
+
+        if normalize:
+            X = self._normalize(X)
+            self._scaler_fitted = True
 
         return X, y
 

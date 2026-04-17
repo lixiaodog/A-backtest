@@ -1,14 +1,18 @@
 import os
 import json
 import uuid
+import pickle
 from datetime import datetime
 
 
 class ModelRegistry:
-    def __init__(self, registry_path=None):
+    def __init__(self, registry_path=None, models_dir=None):
         if registry_path is None:
             registry_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'model_registry.json')
+        if models_dir is None:
+            models_dir = os.path.dirname(registry_path)
         self.registry_path = registry_path
+        self.models_dir = models_dir
         os.makedirs(os.path.dirname(registry_path), exist_ok=True)
         self._ensure_registry()
 
@@ -77,7 +81,8 @@ class ModelRegistry:
 
     def get_all_models(self):
         data = self._load_registry()
-        return data.get('models', [])
+        models = data.get('models', [])
+        return sorted(models, key=lambda x: x.get('created_at', ''), reverse=True)
 
     def get_models_by_stock(self, stock_code):
         data = self._load_registry()
@@ -86,19 +91,81 @@ class ModelRegistry:
     def get_model_by_id(self, model_id):
         data = self._load_registry()
         for model in data['models']:
-            if model['id'] == model_id:
+            if model['id'] == model_id or model['model_name'] == model_id:
                 return model
+
+        filepath = os.path.join(self.models_dir, f'{model_id}.pkl')
+        if os.path.exists(filepath):
+            model_info = {
+                'id': model_id,
+                'model_name': model_id,
+                'file_path': filepath,
+                'model_type': 'Unknown',
+                'features': [],
+                'feature_count': 0,
+                'mode': 'classification',
+                'threshold': 0.02
+            }
+            try:
+                with open(filepath, 'rb') as f:
+                    model = pickle.load(f)
+                    model_info['model_type'] = type(model).__name__
+                    if hasattr(model, 'feature_names_in_'):
+                        model_info['features'] = list(model.feature_names_in_)
+                        model_info['feature_count'] = len(model.feature_names_in_)
+                    elif hasattr(model, 'features'):
+                        model_info['features'] = model.features
+                        model_info['feature_count'] = len(model.features)
+            except Exception as e:
+                print(f'Error loading model {filepath}: {e}')
+            return model_info
         return None
 
     def delete_model(self, model_id):
         data = self._load_registry()
-        original_count = len(data['models'])
-        data['models'] = [m for m in data['models'] if m['id'] != model_id]
+        model_to_delete = None
 
-        if len(data['models']) < original_count:
+        for m in data['models']:
+            if m['id'] == model_id or m['model_name'] == model_id:
+                model_to_delete = m
+                break
+
+        deleted_from_registry = False
+        deleted_from_disk = False
+
+        if model_to_delete:
+            parent_id = model_to_delete.get('parent_model_id')
+            if parent_id:
+                models_to_delete = [x for x in data['models'] if x.get('parent_model_id') == parent_id]
+            else:
+                models_to_delete = [model_to_delete]
+
+            for m in models_to_delete:
+                filepath = m.get('file_path')
+                if filepath and os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                        print(f'Deleted model file: {filepath}')
+                        deleted_from_disk = True
+                    except Exception as e:
+                        print(f'Error deleting model file {filepath}: {e}')
+
+            model_ids_to_remove = set(x['id'] for x in models_to_delete)
+            model_names_to_remove = set(x.get('model_name', '') for x in models_to_delete)
+            data['models'] = [m for m in data['models'] if m['id'] not in model_ids_to_remove and m.get('model_name', '') not in model_names_to_remove]
+            deleted_from_registry = True
             self._save_registry(data)
-            return True
-        return False
+        else:
+            filepath = os.path.join(self.models_dir, f'{model_id}.pkl')
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                    deleted_from_disk = True
+                    print(f'Deleted orphaned model file: {filepath}')
+                except Exception as e:
+                    print(f'Error deleting orphaned model file {filepath}: {e}')
+
+        return deleted_from_registry or deleted_from_disk
 
     def update_incremental_data(self, model_id, new_incremental_data):
         data = self._load_registry()
@@ -117,6 +184,6 @@ class ModelRegistry:
             return None
 
         return {
-            'features': model_info['features'],
-            'feature_count': model_info['feature_count']
+            'features': model_info.get('features', []),
+            'feature_count': model_info.get('feature_count', 0)
         }
