@@ -1,14 +1,21 @@
 import threading
 import queue
 import time
+from datetime import datetime
 import pandas as pd
 import numpy as np
 from ml import MLDataLoader, FeatureEngineer
 
+
+def _log(message, level='INFO'):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    print(f'[{timestamp}] [{level}] {message}')
+
 class TrainingPipeline:
     def __init__(self, stock_list, task_id, prepare_func, features, horizon, threshold,
                  vol_window, lower_q, upper_q, start_date, end_date, period, market, mode,
-                 training_tasks, progress_offset=0, progress_scale=0.6, num_feature_workers=3):
+                 training_tasks, progress_offset=0, progress_scale=0.6, num_feature_workers=3,
+                 data_source='csv', use_gpu=False, fast_mode=False):
         self.stock_list = stock_list
         self.task_id = task_id
         self.prepare_func = prepare_func
@@ -27,10 +34,14 @@ class TrainingPipeline:
         self.progress_offset = progress_offset
         self.progress_scale = progress_scale
         self.num_feature_workers = num_feature_workers
+        self.data_source = data_source
+        self.use_gpu = use_gpu
+        self.fast_mode = fast_mode
 
         self.raw_queue = queue.Queue(maxsize=10)
         self.feature_queue = queue.Queue(maxsize=10)
         self.raw_done_event = threading.Event()
+        self.stop_event = threading.Event()
         self.feature_done_event = threading.Event()
         self.training_result = None
         self.error = None
@@ -42,6 +53,12 @@ class TrainingPipeline:
         self.workers_lock = threading.Lock()
         self.current_stock = ""
         self.current_stage = "准备中"
+
+    def is_stopped(self):
+        """检查是否被停止"""
+        if self.task_id in self.training_tasks:
+            return self.training_tasks[self.task_id].get('stopped', False)
+        return False
 
     def _update_progress(self, processed, total, stage, current_stock=""):
         stock_progress = int((processed / total) * self.progress_scale * 100)
@@ -55,7 +72,11 @@ class TrainingPipeline:
         }
 
     def thread1_data_loader(self):
+        _log(f'[数据加载] 开始加载 {len(self.stock_list)} 只股票的数据')
         for idx, stock_code in enumerate(self.stock_list):
+            if self.is_stopped():
+                _log('[数据加载] 收到停止信号，退出', 'WARN')
+                break
             try:
                 data_loader = MLDataLoader()
                 raw_data = data_loader.load_stock_data(
@@ -64,49 +85,53 @@ class TrainingPipeline:
                 )
 
                 if len(raw_data) < 100:
-                    print(f'[线程1] {stock_code} 原始数据量太少({len(raw_data)}条)，跳过')
+                    _log(f'[数据加载] {stock_code} 原始数据量太少({len(raw_data)}条)，跳过', 'WARN')
                     continue
 
                 self.raw_queue.put((stock_code, raw_data), timeout=30)
-                print(f'[线程1] {stock_code} 加载完成，待处理')
+                _log(f'[数据加载] {stock_code} 加载完成({len(raw_data)}条)，待处理 [{idx+1}/{len(self.stock_list)}]')
 
             except FileNotFoundError:
-                print(f'[线程1] {stock_code} 文件不存在，跳过')
+                _log(f'[数据加载] {stock_code} 文件不存在，跳过', 'WARN')
             except Exception as e:
-                print(f'[线程1] {stock_code} 加载失败: {e}')
+                _log(f'[数据加载] {stock_code} 加载失败: {e}', 'ERROR')
 
         self.raw_done_event.set()
-        print('[线程1] 数据加载完成')
+        _log('[数据加载] 数据加载完成')
 
     def thread2_feature_generator(self, worker_id=0):
+        _log(f'[特征生成-{worker_id}] 开始处理特征')
         processed = 0
         while not (self.raw_queue.empty() and self.raw_done_event.is_set()):
+            if self.is_stopped():
+                _log(f'[特征生成-{worker_id}] 收到停止信号，退出', 'WARN')
+                break
             try:
                 stock_code, raw_data = self.raw_queue.get(timeout=2)
 
                 feature_engineer = FeatureEngineer()
 
                 if self.prepare_func == 'prepare_data_regression':
-                    X, y = feature_engineer.prepare_data_regression(raw_data, self.features, self.horizon, normalize=False)
+                    X, y = feature_engineer.prepare_data_regression(raw_data, self.features, self.horizon, normalize=False, stock_code=stock_code, data_source=self.data_source)
                 elif self.prepare_func == 'prepare_data_with_volatility':
                     X, y = feature_engineer.prepare_data_with_volatility(
-                        raw_data, self.features, self.horizon, self.vol_window, self.lower_q, self.upper_q, normalize=False
+                        raw_data, self.features, self.horizon, self.vol_window, self.lower_q, self.upper_q, normalize=False, stock_code=stock_code, data_source=self.data_source
                     )
                 elif self.prepare_func == 'prepare_data_multi':
                     X, y = feature_engineer.prepare_data_multi(
-                        raw_data, self.features, self.horizon, self.lower_q, self.upper_q, normalize=False
+                        raw_data, self.features, self.horizon, self.lower_q, self.upper_q, normalize=False, stock_code=stock_code, data_source=self.data_source
                     )
                 else:
-                    X, y = feature_engineer.prepare_data(raw_data, self.features, self.horizon, self.threshold, normalize=False)
+                    X, y = feature_engineer.prepare_data(raw_data, self.features, self.horizon, self.threshold, normalize=False, stock_code=stock_code, data_source=self.data_source)
 
                 if len(X) < 50:
-                    print(f'[线程2-{worker_id}] {stock_code} 特征数据量太少({len(X)}条)，跳过')
+                    _log(f'[特征生成-{worker_id}] {stock_code} 特征数据量太少({len(X)}条)，跳过', 'WARN')
                     self.raw_queue.task_done()
                     continue
 
                 self.feature_queue.put((stock_code, X, y), timeout=30)
                 processed += 1
-                print(f'[线程2-{worker_id}] {stock_code} 特征生成完成，样本数: {len(X)}')
+                _log(f'[特征生成-{worker_id}] {stock_code} 特征生成完成，样本数: {len(X)}，特征数: {X.shape[1]}')
 
                 self.raw_queue.task_done()
 
@@ -115,7 +140,7 @@ class TrainingPipeline:
                     break
                 continue
             except Exception as e:
-                print(f'[线程2-{worker_id}] {stock_code} 特征生成失败: {e}')
+                _log(f'[特征生成-{worker_id}] {stock_code} 特征生成失败: {e}', 'ERROR')
                 if not self.raw_queue.empty():
                     try:
                         self.raw_queue.task_done()
@@ -127,20 +152,26 @@ class TrainingPipeline:
             self.workers_finished += 1
             if self.workers_finished >= self.num_feature_workers:
                 self.feature_done_event.set()
-        print(f'[线程2-{worker_id}] 特征生成完成，共处理 {processed} 只股票')
+        _log(f'[特征生成-{worker_id}] 完成，共处理 {processed} 只股票')
 
     def thread3_trainer(self):
         from ml.feature_engineering import FeatureEngineer
+        from sklearn.preprocessing import StandardScaler
 
+        _log('[数据处理] 开始收集特征数据')
         collected = 0
         while not (self.feature_queue.empty() and self.feature_done_event.is_set()):
+            if self.is_stopped():
+                _log('[数据处理] 收到停止信号，退出', 'WARN')
+                self.training_result = None
+                return
             try:
                 stock_code, X, y = self.feature_queue.get(timeout=2)
                 self.all_X.append(X)
                 self.all_y.append(y)
                 self.stock_sample_counts[stock_code] = len(X)
                 collected += 1
-                print(f'[线程3] {stock_code} 数据已收集，当前共 {len(self.all_X)} 只股票')
+                _log(f'[数据处理] {stock_code} 数据已收集，当前共 {len(self.all_X)} 只股票')
                 self._update_progress(collected, len(self.stock_list), '收集数据', stock_code)
                 self.feature_queue.task_done()
 
@@ -149,7 +180,7 @@ class TrainingPipeline:
                     break
                 continue
             except Exception as e:
-                print(f'[线程3] 收集数据失败: {e}')
+                _log(f'[数据处理] 收集数据失败: {e}', 'ERROR')
                 if not self.feature_queue.empty():
                     try:
                         self.feature_queue.task_done()
@@ -158,23 +189,88 @@ class TrainingPipeline:
                 continue
 
         if not self.all_X:
-            print('[线程3] 没有收集到任何数据')
+            _log('[数据处理] 没有收集到任何数据', 'ERROR')
             self.training_result = None
             return
 
-        print(f'[线程3] 数据收集完成，共 {len(self.all_X)} 只股票，开始统一归一化...')
-        import pandas as pd
-        combined_X = pd.concat(self.all_X, ignore_index=True)
-        combined_y = pd.concat(self.all_y, ignore_index=True)
+        _log(f'[数据处理] 数据收集完成，共 {len(self.all_X)} 只股票，开始合并数据...')
+        self._update_progress(len(self.stock_list), len(self.stock_list), '合并数据', '')
+        start_time = time.time()
 
-        scaler = FeatureEngineer()
-        combined_X_scaled = scaler._normalize(combined_X)
-        scaler_params = scaler.get_scaler_params()
+        total_rows = sum(len(X) for X in self.all_X)
+        n_features = self.all_X[0].shape[1]
+        feature_names = self.all_X[0].columns.tolist()
+
+        _log(f'[数据处理] 样本总数: {total_rows}, 特征数: {n_features}')
+
+        combined_X = np.empty((total_rows, n_features), dtype=np.float32)
+        combined_y = np.empty(total_rows, dtype=np.float32)
+
+        offset = 0
+        for X, y in zip(self.all_X, self.all_y):
+            n = len(X)
+            combined_X[offset:offset+n] = X.values
+            combined_y[offset:offset+n] = y.values
+            offset += n
+
+        merge_time = time.time() - start_time
+        _log(f'[数据处理] 数据合并完成，耗时 {merge_time:.2f}秒')
+
+        self._update_progress(len(self.stock_list), len(self.stock_list), '归一化', '')
+        _log(f'[归一化] 开始归一化 {n_features} 个特征...')
+        _log(f'[归一化] 特征列表: {feature_names[:10]}{"..." if len(feature_names) > 10 else ""}')
+        normalize_start = time.time()
+
+        if self.use_gpu:
+            try:
+                import cupy as cp
+                _log('[归一化] 使用 GPU (cupy) 进行归一化')
+                X_gpu = cp.asarray(combined_X)
+                mean = cp.mean(X_gpu, axis=0)
+                std = cp.std(X_gpu, axis=0)
+                std[std == 0] = 1
+                X_normalized_gpu = (X_gpu - mean) / std
+                combined_X_scaled = cp.asnumpy(X_normalized_gpu)
+                scaler_params = {
+                    'mean': cp.asnumpy(mean).tolist(),
+                    'scale': cp.asnumpy(std).tolist(),
+                    'n_features_in_': n_features,
+                    'feature_names': feature_names
+                }
+                del X_gpu, X_normalized_gpu
+                cp.get_default_memory_pool().free_all_blocks()
+            except ImportError:
+                _log('[归一化] cupy 未安装，回退到 CPU 归一化', 'WARN')
+                scaler = StandardScaler()
+                combined_X_scaled = scaler.fit_transform(combined_X)
+                scaler_params = {
+                    'mean': scaler.mean_.tolist(),
+                    'scale': scaler.scale_.tolist(),
+                    'n_features_in_': n_features,
+                    'feature_names': feature_names
+                }
+        else:
+            _log('[归一化] 使用 CPU (StandardScaler) 进行归一化')
+            scaler = StandardScaler()
+            combined_X_scaled = scaler.fit_transform(combined_X)
+            scaler_params = {
+                'mean': scaler.mean_.tolist(),
+                'scale': scaler.scale_.tolist(),
+                'n_features_in_': n_features,
+                'feature_names': feature_names
+            }
+
+        normalize_time = time.time() - normalize_start
+        _log(f'[归一化] 完成，耗时 {normalize_time:.2f}秒')
+
+        combined_X_scaled = pd.DataFrame(combined_X_scaled, columns=feature_names)
+        combined_y = pd.Series(combined_y)
 
         self.all_X = [combined_X_scaled]
         self.all_y = [combined_y]
 
-        print(f'[线程3] 统一归一化完成，最终样本数: {len(combined_X_scaled)}')
+        total_time = time.time() - start_time
+        _log(f'[数据处理] 全部完成，总耗时 {total_time:.2f}秒，最终样本数: {len(combined_X_scaled)}')
         self.training_result = {
             'all_X': self.all_X,
             'all_y': self.all_y,

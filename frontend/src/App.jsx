@@ -8,6 +8,7 @@ import TradeHistory from './components/TradeHistory'
 import LogOutput from './components/LogOutput'
 import MLPanel from './components/MLPanel'
 import StrategyManager from './components/StrategyManager'
+import FactorCachePanel from './components/FactorCachePanel'
 
 const { Header, Content } = Layout
 const { Title } = Typography
@@ -253,6 +254,12 @@ function App() {
           >
             机器学习
           </Button>
+          <Button
+            type={activeModule === 'factor_cache' ? 'primary' : 'default'}
+            onClick={() => setActiveModule('factor_cache')}
+          >
+            因子缓存
+          </Button>
         </div>
       </Header>
       <Content style={{ padding: 12, background: '#0a0a1a' }}>
@@ -307,10 +314,16 @@ function App() {
               </div>
             </Col>
           </Row>
-        ) : (
+        ) : activeModule === 'ml' ? (
           <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
             <Col span={24} style={{ height: '100%' }}>
               <MLPanel />
+            </Col>
+          </Row>
+        ) : (
+          <Row gutter={12} style={{ height: 'calc(100vh - 100px)' }}>
+            <Col span={24} style={{ height: '100%' }}>
+              <FactorCachePanel />
             </Col>
           </Row>
         )}

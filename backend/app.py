@@ -2,7 +2,8 @@ import re
 import importlib
 import inspect
 import time
-from flask import Flask, request, jsonify, send_from_directory
+from datetime import datetime
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -18,6 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data_handler import get_astock_hist_data, load_csv_data, AStockData
 from backtest_engine import AStockBacktestEngine
+
+
+def _log(message, level='INFO'):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    print(f'[{timestamp}] [{level}] {message}')
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'backtrader-secret'
@@ -132,6 +138,8 @@ watcher_thread.start()
 tasks = {}
 training_tasks = {}
 training_threads = {}
+task_queue = []
+queue_running = False
 
 backtest_tasks = tasks
 
@@ -287,24 +295,35 @@ def serve_chart(filename):
 def _run_training_task(task_id, stock_list, market, period, model_name, start_date, end_date,
                         model_type, features, horizon, threshold, label_type, vol_window,
                         lower_q, upper_q, mode, use_ensemble, total_stocks, prepare_func,
-                        task_index=0, total_tasks=1):
+                        task_index=0, total_tasks=1, data_source='csv', use_gpu=False, fast_mode=False):
     """后台线程执行单个训练任务"""
     from ml import ModelTrainer, ModelRegistry
     from ml.model_naming import generate_model_name
     from backend.pipeline import TrainingPipeline
 
-    trainer = ModelTrainer()
+    def progress_callback(message, progress=None):
+        if task_id in training_tasks:
+            current = training_tasks[task_id]
+            training_tasks[task_id] = {
+                'progress': progress if progress is not None else current.get('progress', 65),
+                'status': current.get('status', 'running'),
+                'message': f'任务 {task_index + 1}/{total_tasks}: {message}',
+                'current_task_index': task_index,
+                'total_tasks': total_tasks
+            }
+
+    trainer = ModelTrainer(progress_callback=progress_callback)
     registry = ModelRegistry()
 
     # 更新任务状态，包含当前任务序号
     training_tasks[task_id] = {
         'progress': 5,
-        'status': '准备训练...',
+        'status': 'running',
         'message': f'任务 {task_index + 1}/{total_tasks}: 将处理 {total_stocks} 只股票',
         'current_task_index': task_index,
         'total_tasks': total_tasks
     }
-    print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 将处理 {total_stocks} 只股票')
+    _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 将处理 {total_stocks} 只股票')
 
     pipeline = TrainingPipeline(
         stock_list=stock_list,
@@ -323,24 +342,37 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
         mode=mode,
         training_tasks=training_tasks,
         progress_offset=5,
-        progress_scale=0.55
+        progress_scale=0.55,
+        data_source=data_source,
+        use_gpu=use_gpu,
+        fast_mode=fast_mode
     )
 
+    # 检查任务是否被停止
+    if task_id in training_tasks and training_tasks[task_id].get('stopped'):
+        _log(f'[训练任务] 任务ID: {task_id} - 任务已被停止')
+        return
+    
     try:
         pipeline_result = pipeline.run()
     except Exception as e:
-        print(f'[训练] 任务ID: {task_id} - 管道执行失败: {e}')
+        _log(f'[训练任务] 任务ID: {task_id} - 管道执行失败: {e}', 'ERROR')
         traceback.print_exc()
         if task_id in training_tasks:
-            training_tasks[task_id] = {'progress': 0, 'status': '失败', 'message': str(e)}
+            training_tasks[task_id] = {'progress': 0, 'status': 'failed', 'message': str(e)}
+        return
+    
+    # 检查任务是否被停止
+    if task_id in training_tasks and training_tasks[task_id].get('stopped'):
+        _log(f'[训练任务] 任务ID: {task_id} - 任务已被停止')
         return
 
     if not pipeline_result:
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据', 'WARN')
         if task_id in training_tasks:
             training_tasks[task_id] = {
                 'progress': 0,
-                'status': '失败',
+                'status': 'failed',
                 'message': f'任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据',
                 'current_task_index': task_index,
                 'total_tasks': total_tasks
@@ -353,11 +385,11 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
     scaler_params = pipeline_result['scaler_params']
 
     if not all_X:
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据', 'WARN')
         if task_id in training_tasks:
             training_tasks[task_id] = {
                 'progress': 0,
-                'status': '失败',
+                'status': 'failed',
                 'message': f'任务 {task_index + 1}/{total_tasks}: 没有足够的有效数据',
                 'current_task_index': task_index,
                 'total_tasks': total_tasks
@@ -370,44 +402,49 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
     if task_id in training_tasks:
         training_tasks[task_id] = {
             'progress': 65,
-            'status': '训练模型...',
+            'status': 'running',
             'message': f'任务 {task_index + 1}/{total_tasks}: 总样本数: {len(X)}，来自 {len(stock_sample_counts)} 只股票',
             'current_task_index': task_index,
             'total_tasks': total_tasks
         }
-    print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 开始训练模型, 总样本数: {len(X)}')
+    _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 开始训练模型, 总样本数: {len(X)}')
 
     import uuid
+    from datetime import datetime
+    
     model_id = str(uuid.uuid4())[:8]
     stock_display = f'{len(stock_sample_counts)}只股票'
+    
+    if not end_date:
+        end_date = datetime.now().strftime('%Y%m%d')
 
     parent_id = str(uuid.uuid4())
 
     if use_ensemble:
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练模式')
-        result = trainer.train_ensemble(X, y, mode=mode)
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练完成')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练模式')
+        result = trainer.train_ensemble(X, y, mode=mode, use_gpu=use_gpu, fast_mode=fast_mode)
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练完成')
 
         training_tasks[task_id] = {
             'progress': 80,
-            'status': '保存模型...',
+            'status': 'running',
             'message': f'任务 {task_index + 1}/{total_tasks}: 正在保存子模型',
             'current_task_index': task_index,
             'total_tasks': total_tasks
         }
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 正在保存子模型...')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 正在保存子模型...')
 
         parent_id = str(uuid.uuid4())[:8]
         trained_models = []
         for i, model_key in enumerate(result['models'].keys()):
             training_tasks[task_id] = {
                 'progress': 85 + i*5,
-                'status': '保存模型...',
+                'status': 'running',
                 'message': f'任务 {task_index + 1}/{total_tasks}: 正在保存 {model_key} ({i+1}/{len(result["models"])})',
                 'current_task_index': task_index,
                 'total_tasks': total_tasks
             }
-            print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 保存 {model_key} ({i+1}/{len(result["models"])})')
+            _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 保存 {model_key} ({i+1}/{len(result["models"])})')
             model_obj = result['models'][model_key]
             sub_filename = generate_model_name(
                 market=market,
@@ -416,6 +453,7 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
                 end_date=end_date,
                 feature_count=len(features),
                 horizon=horizon,
+                label_type=label_type,
                 threshold=threshold,
                 vol_window=vol_window,
                 stock_count=total_stocks,
@@ -448,25 +486,25 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
             trained_models.append(sub_model_info)
         training_tasks[task_id] = {
             'progress': 100,
-            'status': '完成',
+            'status': 'completed',
             'message': f'任务 {task_index + 1}/{total_tasks}: 训练完成!',
             'current_task_index': task_index,
             'total_tasks': total_tasks
         }
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练完成, 保存了{len(trained_models)}个子模型')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 集成训练完成, 保存了{len(trained_models)}个子模型')
     else:
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 单模型训练模式, 模型: {model_type}')
-        result = trainer.train_with_split(X, y, model_type, mode=mode)
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 模型训练完成')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 单模型训练模式, 模型: {model_type}')
+        result = trainer.train_with_split(X, y, model_type, mode=mode, use_gpu=use_gpu, fast_mode=fast_mode)
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 模型训练完成')
 
         training_tasks[task_id] = {
             'progress': 80,
-            'status': '保存模型...',
+            'status': 'running',
             'message': f'任务 {task_index + 1}/{total_tasks}: 正在保存模型',
             'current_task_index': task_index,
             'total_tasks': total_tasks
         }
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 正在保存模型...')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 正在保存模型...')
 
         if not model_name:
             if mode == 'regression':
@@ -480,6 +518,7 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
                 end_date=end_date,
                 feature_count=len(features),
                 horizon=horizon,
+                label_type=label_type,
                 threshold=threshold,
                 vol_window=vol_window,
                 stock_count=total_stocks,
@@ -512,32 +551,197 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
 
         training_tasks[task_id] = {
             'progress': 100,
-            'status': '完成',
+            'status': 'completed',
             'message': f'任务 {task_index + 1}/{total_tasks}: 训练完成!',
             'current_task_index': task_index,
             'total_tasks': total_tasks
         }
-        print(f'[训练] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 单模型训练完成, 模型已保存: {filename}')
+        _log(f'[训练任务] 任务ID: {task_id} - 任务 {task_index + 1}/{total_tasks}: 单模型训练完成, 模型已保存: {filename}')
+
+
+def _run_task_queue():
+    """顺序执行任务队列中的所有任务"""
+    global queue_running
+    import time
+    
+    queue_running = True
+    _log(f'[任务队列] 开始执行任务队列，共 {len(task_queue)} 个任务')
+    
+    while task_queue:
+        task_id = task_queue[0]
+        task_data = training_tasks.get(task_id)
+        
+        if not task_data:
+            task_queue.pop(0)
+            continue
+        
+        if task_data.get('status') == 'stopped':
+            _log(f'[任务队列] 任务 {task_id} 已停止，跳过')
+            task_queue.pop(0)
+            continue
+        
+        _log(f'[任务队列] 开始执行任务: {task_id}')
+        training_tasks[task_id]['status'] = 'running'
+        training_tasks[task_id]['message'] = '正在训练...'
+        
+        try:
+            _run_single_training_task(task_id, task_data)
+        except Exception as e:
+            _log(f'[任务队列] 任务 {task_id} 执行失败: {e}', 'ERROR')
+            if task_id in training_tasks:
+                training_tasks[task_id]['status'] = 'failed'
+                training_tasks[task_id]['message'] = str(e)
+        
+        task_queue.pop(0)
+        _log(f'[任务队列] 任务 {task_id} 执行完成，剩余 {len(task_queue)} 个任务')
+    
+    queue_running = False
+    _log(f'[任务队列] 所有任务执行完成')
+
+
+def _run_single_training_task(task_id, task_data):
+    """执行单个训练任务"""
+    import time
+    start_time = time.time()
+    
+    stock_list = task_data.get('stock', [])
+    if isinstance(stock_list, str):
+        stock_list = [stock_list]
+    
+    market = task_data.get('market', 'SZ')
+    period = task_data.get('period', '1d')
+    model_name = task_data.get('model_name')
+    end_date = task_data.get('end_date')
+    model_type = task_data.get('model_type', 'RandomForest')
+    features = task_data.get('features', [])
+    horizon = task_data.get('horizon', 5)
+    threshold = task_data.get('threshold', 0.02)
+    label_type = task_data.get('label_type', 'fixed')
+    vol_window = task_data.get('vol_window', 20)
+    lower_q = task_data.get('lower_q', 0.2)
+    upper_q = task_data.get('upper_q', 0.8)
+    mode = task_data.get('mode', 'classification')
+    use_ensemble = task_data.get('use_ensemble', False)
+    train_mode = task_data.get('train_mode', 'thread')
+    data_source = task_data.get('data_source', 'csv')
+    use_gpu = task_data.get('use_gpu', False)
+    fast_mode = task_data.get('fast_mode', False)
+    
+    if label_type == 'regression' or mode == 'regression':
+        prepare_func = 'prepare_data_regression'
+        mode = 'regression'
+        label_type = 'regression'
+    elif label_type == 'volatility':
+        prepare_func = 'prepare_data_with_volatility'
+    elif label_type == 'multi':
+        prepare_func = 'prepare_data_multi'
+    else:
+        prepare_func = 'prepare_data'
+    
+    try:
+        if train_mode == 'process':
+            from backend.parallel_train import parallel_train
+            result = parallel_train(
+                stock_list=stock_list,
+                params={
+                    'start_date': None,
+                    'end_date': end_date,
+                    'period': period,
+                    'market': market,
+                    'features': features,
+                    'horizon': horizon,
+                    'threshold': threshold,
+                    'prepare_func': prepare_func,
+                    'vol_window': vol_window,
+                    'lower_q': lower_q,
+                    'upper_q': upper_q,
+                    'model_type': model_type,
+                    'use_ensemble': use_ensemble,
+                    'task_id': task_id,
+                    'training_tasks': training_tasks,
+                    'mode': mode,
+                    'model_name': model_name,
+                    'data_source': data_source,
+                    'use_gpu': use_gpu,
+                    'fast_mode': fast_mode,
+                    'label_type': label_type
+                },
+                task_id=task_id,
+                training_tasks=training_tasks
+            )
+        else:
+            _run_training_task(
+                task_id=task_id,
+                stock_list=stock_list,
+                market=market,
+                period=period,
+                model_name=model_name,
+                start_date=None,
+                end_date=end_date,
+                model_type=model_type,
+                features=features,
+                horizon=horizon,
+                threshold=threshold,
+                label_type=label_type,
+                vol_window=vol_window,
+                lower_q=lower_q,
+                upper_q=upper_q,
+                mode=mode,
+                use_ensemble=use_ensemble,
+                total_stocks=len(stock_list),
+                prepare_func=prepare_func,
+                data_source=data_source,
+                use_gpu=use_gpu,
+                fast_mode=fast_mode
+            )
+            return
+        
+    except Exception as e:
+        _log(f'[训练任务] 任务ID: {task_id} - 失败: {e}', 'ERROR')
+        traceback.print_exc()
+        if task_id in training_tasks:
+            training_tasks[task_id]['status'] = 'failed'
+            training_tasks[task_id]['message'] = str(e)
 
 
 def _run_training_tasks(task_id, tasks):
     """顺序执行多个训练任务，支持多线程/多进程模式"""
+    import time
     total_tasks = len(tasks)
-    print(f'[训练队列] 任务ID: {task_id} - 开始执行 {total_tasks} 个训练任务')
+    start_time = time.time()
+    _log(f'[训练队列] 任务ID: {task_id} - 开始执行 {total_tasks} 个训练任务')
+    
+    # 收集所有股票
+    all_stocks = []
+    for task in tasks:
+        stock_list = task.get('stock', [])
+        if isinstance(stock_list, str):
+            stock_list = [stock_list]
+        all_stocks.extend(stock_list)
+    
+    # 获取训练模式
+    train_mode = tasks[0].get('train_mode', 'thread') if tasks else 'thread'
 
     training_tasks[task_id] = {
         'progress': 0,
-        'status': '初始化...',
+        'status': 'running',
         'message': f'共 {total_tasks} 个任务，准备开始...',
         'current_task_index': 0,
-        'total_tasks': total_tasks
+        'total_tasks': total_tasks,
+        'start_time': start_time,
+        'type': 'batch',
+        'train_mode': train_mode,
+        'stocks': all_stocks,
+        'success_count': 0,
+        'fail_count': 0,
+        'params': tasks[0] if tasks else {}
     }
 
     success_count = 0
     fail_count = 0
 
     for i, task in enumerate(tasks):
-        print(f'[训练队列] 任务ID: {task_id} - 开始第 {i + 1}/{total_tasks} 个任务')
+        _log(f'[训练队列] 任务ID: {task_id} - 开始第 {i + 1}/{total_tasks} 个任务')
 
         # 提取任务参数
         stock_list = task.get('stock', [])
@@ -551,6 +755,7 @@ def _run_training_tasks(task_id, tasks):
         model_type = task.get('model_type', 'RandomForest')
         features = task.get('features', [])
         horizon = task.get('horizon', 5)
+        _log(f'[训练队列] 任务 {i+1}/{total_tasks}: market={market}, horizon={horizon}, model_name={model_name}')
         threshold = task.get('threshold', 0.02)
         label_type = task.get('label_type', 'fixed')
         vol_window = task.get('vol_window', 20)
@@ -559,11 +764,15 @@ def _run_training_tasks(task_id, tasks):
         mode = task.get('mode', 'classification')
         use_ensemble = task.get('use_ensemble', False)
         train_mode = task.get('train_mode', 'thread')  # 获取训练模式
+        data_source = task.get('data_source', 'csv')  # 获取数据源
+        use_gpu = task.get('use_gpu', False)  # 获取GPU加速选项
+        fast_mode = task.get('fast_mode', False)  # 获取快速训练选项
 
         # 确定 prepare_func
         if label_type == 'regression' or mode == 'regression':
             prepare_func = 'prepare_data_regression'
             mode = 'regression'
+            label_type = 'regression'
         elif label_type == 'volatility':
             prepare_func = 'prepare_data_with_volatility'
         elif label_type == 'multi':
@@ -574,7 +783,7 @@ def _run_training_tasks(task_id, tasks):
         try:
             if train_mode == 'process':
                 # 多进程模式
-                print(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务使用多进程模式')
+                _log(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务使用多进程模式')
                 from backend.parallel_train import parallel_train
                 parallel_train(
                     stock_list=stock_list,
@@ -596,7 +805,8 @@ def _run_training_tasks(task_id, tasks):
                         'training_tasks': training_tasks,
                         'mode': mode,
                         'model_name': model_name,
-                        'label_type': label_type
+                        'label_type': label_type,
+                        'data_source': data_source
                     },
                     task_id=task_id,
                     training_tasks=training_tasks
@@ -624,32 +834,35 @@ def _run_training_tasks(task_id, tasks):
                     total_stocks=len(stock_list),
                     prepare_func=prepare_func,
                     task_index=i,
-                    total_tasks=total_tasks
+                    total_tasks=total_tasks,
+                    data_source=data_source,
+                    use_gpu=use_gpu,
+                    fast_mode=fast_mode
                 )
             success_count += 1
-            print(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务完成')
+            _log(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务完成')
         except Exception as e:
             fail_count += 1
-            print(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务失败: {e}')
+            _log(f'[训练队列] 任务ID: {task_id} - 第 {i + 1}/{total_tasks} 个任务失败: {e}', 'ERROR')
             traceback.print_exc()
 
     # 所有任务完成
     final_progress = 100 if fail_count == 0 else int((success_count / total_tasks) * 100)
     training_tasks[task_id] = {
         'progress': final_progress,
-        'status': '完成' if fail_count == 0 else '部分完成',
+        'status': 'completed' if fail_count == 0 else 'partial',
         'message': f'所有任务完成: {success_count}/{total_tasks} 成功, {fail_count}/{total_tasks} 失败',
         'current_task_index': total_tasks - 1,
         'total_tasks': total_tasks
     }
-    print(f'[训练队列] 任务ID: {task_id} - 所有 {total_tasks} 个任务执行完毕: {success_count} 成功, {fail_count} 失败')
+    _log(f'[训练队列] 任务ID: {task_id} - 所有 {total_tasks} 个任务执行完毕: {success_count} 成功, {fail_count} 失败')
 
 
 @app.route('/api/ml/train', methods=['POST'])
 def ml_train():
     task_id = uuid.uuid4().hex[:8]
-    training_tasks[task_id] = {'progress': 0, 'status': '初始化...', 'message': ''}
-    print(f'[训练] 任务ID: {task_id} - 开始训练')
+    training_tasks[task_id] = {'progress': 0, 'status': 'running', 'message': ''}
+    _log(f'[训练] 任务ID: {task_id} - 开始训练')
 
     try:
         from ml.model_naming import generate_model_name
@@ -672,7 +885,7 @@ def ml_train():
         use_ensemble = data.get('use_ensemble', False)
         train_mode = data.get('train_mode', 'thread')
 
-        print(f'[训练] 任务ID: {task_id} - 参数: stock={stock_param}, market={market}, period={period}, horizon={horizon}, use_ensemble={use_ensemble}, train_mode={train_mode}')
+        _log(f'[训练] 任务ID: {task_id} - 参数: stock={stock_param}, market={market}, period={period}, horizon={horizon}, use_ensemble={use_ensemble}, train_mode={train_mode}')
 
         is_multiple_stocks = isinstance(stock_param, list)
         stock_list = stock_param if is_multiple_stocks else [stock_param]
@@ -681,6 +894,7 @@ def ml_train():
         if label_type == 'regression' or mode == 'regression':
             prepare_func = 'prepare_data_regression'
             mode = 'regression'
+            label_type = 'regression'
         elif label_type == 'volatility':
             prepare_func = 'prepare_data_with_volatility'
         elif label_type == 'multi':
@@ -688,9 +902,9 @@ def ml_train():
         else:
             prepare_func = 'prepare_data'
 
-        training_tasks[task_id] = {'progress': 5, 'status': '准备训练...',
+        training_tasks[task_id] = {'progress': 5, 'status': 'running',
             'message': f'将{"多线程" if train_mode == "thread" else "多进程"}处理 {total_stocks} 只股票，训练统一模型'}
-        print(f'[训练] 任务ID: {task_id} - 将{"多线程" if train_mode == "thread" else "多进程"}处理 {total_stocks} 只股票')
+        _log(f'[训练] 任务ID: {task_id} - 将{"多线程" if train_mode == "thread" else "多进程"}处理 {total_stocks} 只股票')
 
         if train_mode == 'process':
             from backend.parallel_train import parallel_train
@@ -733,7 +947,7 @@ def ml_train():
         })
 
     except Exception as e:
-        print(f'[训练] 任务ID: {task_id} - 训练失败: {e}')
+        _log(f'[训练] 任务ID: {task_id} - 训练失败: {e}', 'ERROR')
         traceback.print_exc()
         if task_id in training_tasks:
             del training_tasks[task_id]
@@ -742,11 +956,9 @@ def ml_train():
 
 @app.route('/api/ml/train/batch', methods=['POST'])
 def ml_train_batch():
-    """批量训练端点 - 接收任务列表，顺序执行"""
-    task_id = uuid.uuid4().hex[:8]
-    training_tasks[task_id] = {'progress': 0, 'status': '初始化...', 'message': ''}
-    print(f'[训练批量] 任务ID: {task_id} - 开始批量训练')
-
+    """批量训练端点 - 接收任务列表，每个任务单独显示，顺序执行"""
+    global queue_running
+    
     try:
         data = request.json
         tasks = data.get('tasks', [])
@@ -757,28 +969,60 @@ def ml_train_batch():
         if len(tasks) == 0:
             return jsonify({'error': '任务列表不能为空'}), 400
 
-        print(f'[训练批量] 任务ID: {task_id} - 接收到 {len(tasks)} 个训练任务')
-
-        # 启动后台线程顺序执行所有任务
-        thread = threading.Thread(
-            target=_run_training_tasks,
-            args=(task_id, tasks)
-        )
-        thread.daemon = True
-        training_threads[task_id] = thread
-        thread.start()
+        _log(f'[训练批量] 接收到 {len(tasks)} 个训练任务')
+        
+        task_ids = []
+        for i, task in enumerate(tasks):
+            task_id = uuid.uuid4().hex[:8]
+            task_ids.append(task_id)
+            
+            stock_list = task.get('stock', [])
+            if isinstance(stock_list, str):
+                stock_list = [stock_list]
+            
+            training_tasks[task_id] = {
+                'progress': 0,
+                'status': 'pending',
+                'message': f'等待中 (队列位置: {len(task_queue) + i + 1})',
+                'stock': stock_list,
+                'market': task.get('market', 'SZ'),
+                'period': task.get('period', '1d'),
+                'model_name': task.get('model_name'),
+                'end_date': task.get('end_date'),
+                'model_type': task.get('model_type', 'RandomForest'),
+                'features': task.get('features', []),
+                'horizon': task.get('horizon', 5),
+                'threshold': task.get('threshold', 0.02),
+                'label_type': task.get('label_type', 'fixed'),
+                'vol_window': task.get('vol_window', 20),
+                'lower_q': task.get('lower_q', 0.2),
+                'upper_q': task.get('upper_q', 0.8),
+                'mode': task.get('mode', 'classification'),
+                'use_ensemble': task.get('use_ensemble', False),
+                'train_mode': task.get('train_mode', 'thread'),
+                'data_source': task.get('data_source', 'csv'),
+                'use_gpu': task.get('use_gpu', False),
+                'fast_mode': task.get('fast_mode', False),
+                'queue_position': len(task_queue) + i + 1
+            }
+            
+            task_queue.append(task_id)
+            _log(f'[训练批量] 任务 {i+1}/{len(tasks)} 已添加: {task_id}')
+        
+        if not queue_running:
+            thread = threading.Thread(target=_run_task_queue)
+            thread.daemon = True
+            thread.start()
 
         return jsonify({
             'status': 'started',
-            'task_id': task_id,
-            'message': f'批量训练任务已启动，共 {len(tasks)} 个任务'
+            'task_ids': task_ids,
+            'message': f'已添加 {len(tasks)} 个训练任务到队列'
         })
 
     except Exception as e:
-        print(f'[训练批量] 任务ID: {task_id} - 启动失败: {e}')
+        _log(f'[训练批量] 启动失败: {e}', 'ERROR')
         traceback.print_exc()
-        if task_id in training_tasks:
-            del training_tasks[task_id]
         return jsonify({'error': str(e)}), 500
 
 
@@ -842,6 +1086,7 @@ def ml_train_incremental():
             metrics={},
             parent_model_id=base_model_id,
             incremental_data=new_incremental_info,
+            scaler_params=base_model_info.get('scaler_params'),
             mode=mode,
             is_ensemble=base_model_info.get('is_ensemble', False)
         )
@@ -862,6 +1107,8 @@ def ml_predict():
         stock_codes = data.get('stocks') or [data.get('stock_code') or data.get('stock')]
         model_id = data.get('model_id')
         period = data.get('period', '1d')
+        data_source = data.get('data_source', 'akshare')
+        predict_date = data.get('predict_date')
 
         if not model_id:
             return jsonify({'error': '缺少模型ID'}), 400
@@ -875,6 +1122,12 @@ def ml_predict():
         registry = ModelRegistry()
         model_info = registry.get_model_by_id(model_id)
         if not model_info:
+            model_info = registry.get_model_by_parent_id(model_id)
+        if not model_info:
+            sub_models = registry.get_models_by_parent_id(model_id)
+            if sub_models:
+                model_info = sub_models[0]
+        if not model_info:
             return jsonify({'error': '模型不存在'}), 404
 
         threshold = data.get('threshold', model_info.get('threshold', 0.02))
@@ -882,7 +1135,6 @@ def ml_predict():
         trainer = ModelTrainer()
         model = trainer.load_model(model_info['file_path'])
 
-        from backend.akshare_data import get_realtime_data, get_stock_info
         from ml.predictors import Predictor
 
         mode = model_info.get('mode', 'classification')
@@ -900,65 +1152,221 @@ def ml_predict():
 
         model_name = model_info.get('model_name', '')
 
-        ensemble_prefix = None
-        if '_ensemble_' in model_name or '_Ensemble_' in model_name:
-            parts = model_name.rsplit('_', 1)
-            if len(parts) > 1:
-                ensemble_prefix = parts[0]
-        elif 'ensemble' in model_name.lower() and model_info.get('is_ensemble'):
-            ensemble_prefix = model_name
-
         ensemble_models = None
-        if ensemble_prefix:
+        parent_model_id = model_info.get('parent_model_id')
+        
+        if parent_model_id:
             all_models = registry.get_all_models()
             ensemble_models = {}
-
+            
             for m in all_models:
-                if m['model_name'] == model_name or m['model_name'].startswith(ensemble_prefix + '_'):
+                if m.get('parent_model_id') == parent_model_id:
                     sub_model = trainer.load_model(m['file_path'])
                     ensemble_models[m['model_type']] = sub_model
-
+            
             if len(ensemble_models) > 1:
                 print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+            else:
+                ensemble_models = None
+        elif model_info.get('is_ensemble') or '_ENS_' in model_name or '_ensemble_' in model_name.lower():
+            all_models = registry.get_all_models()
+            ensemble_models = {}
+            
+            parts = model_name.rsplit('_', 2)
+            if len(parts) >= 2:
+                ensemble_prefix = '_'.join(parts[:-2])
+            else:
+                ensemble_prefix = model_name.rsplit('_', 1)[0]
+            
+            for m in all_models:
+                if m.get('parent_model_id') == model_info.get('id'):
+                    sub_model = trainer.load_model(m['file_path'])
+                    ensemble_models[m['model_type']] = sub_model
+                elif m['model_name'].startswith(ensemble_prefix + '_'):
+                    sub_model = trainer.load_model(m['file_path'])
+                    ensemble_models[m['model_type']] = sub_model
+            
+            if len(ensemble_models) > 1:
+                print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+            else:
+                ensemble_models = None
+
+        from backend.providers import ProviderFactory
+        from backend.config import DataSourceConfig
+        
+        if data_source == 'factor_cache':
+            cache_config = DataSourceConfig.get_config('factor_cache')
+            cache_path = cache_config.get('cache_path', './data/factor_cache/')
+            raw_data_path = cache_config.get('raw_data_path', './data/')
+            factor_library = cache_config.get('factor_library', 'alpha191')
+            provider = ProviderFactory.create_provider(
+                'factor_cache',
+                cache_path=cache_path,
+                raw_data_path=raw_data_path,
+                factor_library=factor_library
+            )
+        else:
+            from backend.akshare_data import get_realtime_data, get_stock_info
+            provider = None
 
         results = []
         for stock_code in stock_codes:
             try:
-                raw_data = get_realtime_data(stock_code, period=period, days=300)
-                stock_info = get_stock_info(stock_code)
-
-                if raw_data is None or len(raw_data) < 50:
-                    results.append({
-                        'stock_code': stock_code,
-                        'stock_name': stock_info.get('name', stock_code),
-                        'error': f'无法获取 {stock_code} 的数据或数据不足'
-                    })
-                    continue
-
-                if ensemble_models:
-                    predictor = Predictor(ensemble_models, feature_engineer, label_type)
+                if data_source == 'factor_cache' and provider:
+                    raw_data = provider.get_stock_data(
+                        stock_code, 
+                        period=period,
+                        end_date=predict_date,
+                        latest_only=True,
+                        include_raw_data=False
+                    )
+                    stock_info = provider.get_stock_info(stock_code)
+                    
+                    if raw_data is None or raw_data.empty:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code),
+                            'error': f'无法获取 {stock_code} 的因子数据'
+                        })
+                        continue
+                    
+                    import numpy as np
+                    model_features = model_info.get('features', [])
+                    available_features = [f for f in model_features if f in raw_data.columns]
+                    
+                    if not available_features:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code),
+                            'error': f'{stock_code} 无可用特征'
+                        })
+                        continue
+                    
+                    # 从缓存获取的因子值已经是原始值，需要用训练时的全局 scaler 归一化
+                    last_row = raw_data.iloc[-1:]
+                    features = last_row[available_features].copy()
+                    
+                    if features.isnull().any().any():
+                        features = features.fillna(0)
+                    
+                    # 用训练时保存的全局 scaler 参数归一化
+                    scaler_params = model_info.get('scaler_params')
+                    if scaler_params:
+                        mean = np.array(scaler_params['mean'])
+                        scale = np.array(scaler_params['scale'])
+                        feature_order = scaler_params.get('feature_names', model_features)
+                        
+                        available_in_order = [f for f in feature_order if f in features.columns]
+                        if available_in_order and len(mean) == len(feature_order) and len(scale) == len(feature_order):
+                            features_ordered = features[available_in_order].values
+                            scale_subset = np.array([scale[feature_order.index(f)] for f in available_in_order])
+                            mean_subset = np.array([mean[feature_order.index(f)] for f in available_in_order])
+                            features_normalized = (features_ordered - mean_subset) / scale_subset
+                            features = pd.DataFrame(features_normalized, columns=available_in_order)
+                            print(f'[预测-factor_cache] 归一化完成，特征数: {len(available_in_order)}')
+                        else:
+                            print(f'[预测-factor_cache] 跳过归一化: mean={len(mean)}, scale={len(scale)}, features={len(features.columns)}, order={len(feature_order)}')
+                    
+                    if ensemble_models:
+                        predictor = Predictor(ensemble_models, feature_engineer, label_type)
+                    else:
+                        predictor = Predictor(model, feature_engineer, label_type)
+                    
+                    if mode == "regression":
+                        prediction = predictor._predict_regression(features, threshold)
+                    else:
+                        prediction = predictor._predict_classification(features)
+                    
+                    if prediction is None:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code),
+                            'error': '无法生成预测'
+                        })
+                    else:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code),
+                            'prediction': prediction
+                        })
                 else:
-                    predictor = Predictor(model, feature_engineer, label_type)
+                    if predict_date:
+                        raw_data = get_realtime_data(stock_code, period=period, days=300, end_date=predict_date)
+                    else:
+                        raw_data = get_realtime_data(stock_code, period=period, days=300)
+                    stock_info = get_stock_info(stock_code)
 
-                print(f'[预测] 模型features: {model_info.get("features", [])[:5] if model_info.get("features") else "None"}...')
-                print(f'[预测] scaler_fitted: {feature_engineer._scaler_fitted}')
+                    if raw_data is None or len(raw_data) < 50:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code) if stock_info else stock_code,
+                            'error': f'无法获取 {stock_code} 的数据或数据不足'
+                        })
+                        continue
 
-                result = predictor.predict(raw_data, model_info['features'], threshold=threshold)
+                    # 使用 FeatureEngineer 计算特征
+                    import numpy as np
+                    model_features = model_info.get('features', [])
+                    
+                    # 从原始数据计算特征
+                    features = feature_engineer._compute_features(raw_data, model_features, stock_code=stock_code, data_source='csv')
+                    
+                    if features.empty or features.shape[1] == 0:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code) if stock_info else stock_code,
+                            'error': f'{stock_code} 无可用特征'
+                        })
+                        continue
+                    
+                    # 取最后一行
+                    last_row = features.iloc[-1:]
+                    available_features = [f for f in model_features if f in last_row.columns]
+                    features = last_row[available_features].copy()
+                    
+                    if features.isnull().any().any():
+                        features = features.fillna(0)
+                    
+                    # 用训练时保存的全局 scaler 参数归一化（与 factor_cache 一致）
+                    scaler_params = model_info.get('scaler_params')
+                    if scaler_params:
+                        mean = np.array(scaler_params['mean'])
+                        scale = np.array(scaler_params['scale'])
+                        feature_order = scaler_params.get('feature_names', model_features)
+                        
+                        available_in_order = [f for f in feature_order if f in features.columns]
+                        if available_in_order and len(mean) == len(feature_order) and len(scale) == len(feature_order):
+                            features_ordered = features[available_in_order].values
+                            scale_subset = np.array([scale[feature_order.index(f)] for f in available_in_order])
+                            mean_subset = np.array([mean[feature_order.index(f)] for f in available_in_order])
+                            features_normalized = (features_ordered - mean_subset) / scale_subset
+                            features = pd.DataFrame(features_normalized, columns=available_in_order)
+                            print(f'[预测-akshare] 归一化完成，特征数: {len(available_in_order)}')
+                        else:
+                            print(f'[预测-akshare] 跳过归一化: mean={len(mean)}, scale={len(scale)}, features={len(features.columns)}, order={len(feature_order)}')
 
-                print(f'[预测] predict结果: {result}')
+                    if ensemble_models:
+                        predictor = Predictor(ensemble_models, None, label_type)
+                    else:
+                        predictor = Predictor(model, None, label_type)
 
-                if result is None:
-                    results.append({
-                        'stock_code': stock_code,
-                        'stock_name': stock_info.get('name', stock_code),
-                        'error': '无法生成预测'
-                    })
-                else:
-                    results.append({
-                        'stock_code': stock_code,
-                        'stock_name': stock_info.get('name', stock_code),
-                        'prediction': result
-                    })
+                    if mode == "regression":
+                        prediction = predictor._predict_regression(features, threshold)
+                    else:
+                        prediction = predictor._predict_classification(features)
+
+                    if prediction is None:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code) if stock_info else stock_code,
+                            'error': '无法生成预测'
+                        })
+                    else:
+                        results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_info.get('name', stock_code) if stock_info else stock_code,
+                            'prediction': prediction
+                        })
             except Exception as e:
                 print(f'[预测] {stock_code} 预测失败: {e}')
                 results.append({
@@ -975,6 +1383,278 @@ def ml_predict():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+
+# 选股任务存储
+advanced_prediction_tasks = {}
+
+
+@app.route('/api/ml/predict/advanced', methods=['POST'])
+def ml_predict_advanced():
+    """选股端点 - 支持多股票、多模型、结果排序和融合"""
+    import uuid
+    import threading
+
+    task_id = uuid.uuid4().hex[:8]
+
+    try:
+        data = request.json
+        markets = data.get('markets', [])
+        stocks = data.get('stocks', [])
+        model_ids = data.get('model_ids', [])
+        sort_by = data.get('sort_by', 'confidence')
+        sort_order = data.get('sort_order', 'desc')
+        top_n = data.get('top_n', 100)
+        fusion_mode = data.get('fusion_mode', 'intersection')
+        period = data.get('period', '1d')
+        
+        # 数据源配置
+        data_source = data.get('data_source', 'akshare')
+        
+        if not model_ids:
+            return jsonify({'error': '请至少选择一个模型'}), 400
+
+        # 根据数据源创建 provider，从后端配置读取路径
+        from backend.providers import ProviderFactory
+        from backend.config import DataSourceConfig
+        
+        if data_source == 'local':
+            local_config = DataSourceConfig.get_config('local')
+            data_path = local_config.get('data_path', './data/stocks/')
+            provider = ProviderFactory.create_provider('local', data_path=data_path)
+            if not provider.is_available():
+                return jsonify({'error': f'本地数据路径不可用: {provider.get_error_message()}'}), 400
+        elif data_source == 'factor_cache':
+            cache_config = DataSourceConfig.get_config('factor_cache')
+            cache_path = cache_config.get('cache_path', './data/factor_cache/')
+            raw_data_path = cache_config.get('raw_data_path', './data/')
+            factor_library = cache_config.get('factor_library', 'alpha191')
+            provider = ProviderFactory.create_provider(
+                'factor_cache',
+                cache_path=cache_path,
+                raw_data_path=raw_data_path,
+                factor_library=factor_library
+            )
+            if not provider.is_available():
+                return jsonify({'error': f'因子缓存不可用: {provider.get_error_message()}'}), 400
+        else:
+            provider = ProviderFactory.create_provider('akshare')
+
+        from backend.advanced_predictor import AdvancedPredictor, register_task, get_task_predictor
+        predictor = AdvancedPredictor(max_workers=4, data_provider=provider)
+        
+        task = predictor.create_task(
+            task_id=task_id,
+            markets=markets,
+            stocks=stocks,
+            model_ids=model_ids,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            top_n=top_n,
+            fusion_mode=fusion_mode,
+            period=period
+        )
+        
+        register_task(task_id, predictor)
+
+        # 启动后台线程执行预测
+        thread = threading.Thread(target=predictor.run_prediction, args=(task,))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'task_id': task_id,
+            'status': 'started',
+            'message': f'选股任务已启动，使用 {len(model_ids)} 个模型预测'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/tasks', methods=['GET'])
+def ml_get_advanced_prediction_tasks():
+    """获取所有选股任务列表"""
+    try:
+        from backend.advanced_predictor import get_advanced_predictor, _global_tasks, _global_tasks_lock
+        all_tasks = []
+        predictor = get_advanced_predictor()
+        all_tasks.extend(predictor.get_all_tasks())
+        with _global_tasks_lock:
+            for tid, pred in _global_tasks.items():
+                task = pred.get_task(tid)
+                if task:
+                    import time
+                    elapsed = time.time() - task.start_time if task.start_time > 0 else 0
+                    all_tasks.append({
+                        'task_id': task.task_id,
+                        'status': task.status,
+                        'progress': task.progress,
+                        'message': task.message,
+                        'total_stocks': task.total_stocks,
+                        'processed_stocks': task.processed_stocks,
+                        'model_count': len(task.model_ids),
+                        'elapsed_time': round(elapsed, 1)
+                    })
+        return jsonify({'tasks': all_tasks})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/<task_id>', methods=['GET'])
+def ml_get_advanced_prediction(task_id):
+    """获取选股任务状态和结果"""
+    try:
+        from backend.advanced_predictor import get_task_predictor
+        predictor = get_task_predictor(task_id)
+        if not predictor:
+            from backend.advanced_predictor import get_advanced_predictor
+            predictor = get_advanced_predictor()
+        task = predictor.get_task(task_id)
+
+        if not task:
+            return jsonify({'error': '任务不存在'}), 404
+
+        # 转换结果为可JSON序列化的格式
+        results_dict = {}
+        for model_id, results in task.results.items():
+            results_dict[model_id] = [
+                {
+                    'stock_code': r.stock_code,
+                    'stock_name': r.stock_name,
+                    'model_id': r.model_id,
+                    'model_type': r.model_type,
+                    'model_name': r.model_name,
+                    'signal': r.signal,
+                    'confidence': r.confidence,
+                    'buy_probability': r.buy_probability,
+                    'sell_probability': r.sell_probability,
+                    'hold_probability': r.hold_probability,
+                    'predicted_return': r.predicted_return,
+                    'rank': r.rank,
+                    'error': r.error
+                }
+                for r in results
+            ]
+
+        fused_results = [
+            {
+                'stock_code': r.stock_code,
+                'stock_name': r.stock_name,
+                'model_id': r.model_id,
+                'model_type': r.model_type,
+                'model_name': r.model_name,
+                'signal': r.signal,
+                'confidence': r.confidence,
+                'buy_probability': r.buy_probability,
+                'sell_probability': r.sell_probability,
+                'hold_probability': r.hold_probability,
+                'predicted_return': r.predicted_return,
+                'rank': r.rank
+            }
+            for r in task.fused_results
+        ]
+
+        # 添加导出文件信息
+        export_files = {}
+        for key, filepath in task.export_files.items():
+            if os.path.exists(filepath):
+                filename = os.path.basename(filepath)
+                export_files[key] = {
+                    'filename': filename,
+                    'url': f'/api/ml/predict/advanced/{task_id}/download/{key}'
+                }
+
+        return jsonify({
+            'task_id': task_id,
+            'status': task.status,
+            'progress': task.progress,
+            'message': task.message,
+            'total_stocks': task.total_stocks,
+            'processed_stocks': task.processed_stocks,
+            'results': results_dict,
+            'fused_results': fused_results,
+            'export_files': export_files
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/<task_id>/stop', methods=['POST'])
+def ml_stop_advanced_prediction(task_id):
+    """停止选股任务"""
+    try:
+        from backend.advanced_predictor import get_task_predictor
+        predictor = get_task_predictor(task_id)
+        if not predictor:
+            from backend.advanced_predictor import get_advanced_predictor
+            predictor = get_advanced_predictor()
+        success = predictor.stop_task(task_id)
+        if success:
+            return jsonify({'status': 'stopping', 'message': '正在停止任务...'})
+        else:
+            return jsonify({'error': '任务不存在或已结束'}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/<task_id>', methods=['DELETE'])
+def ml_delete_advanced_prediction(task_id):
+    """删除选股任务"""
+    try:
+        from backend.advanced_predictor import get_task_predictor
+        predictor = get_task_predictor(task_id)
+        if not predictor:
+            from backend.advanced_predictor import get_advanced_predictor
+            predictor = get_advanced_predictor()
+        success = predictor.delete_task(task_id)
+        if success:
+            return jsonify({'status': 'deleted', 'message': '任务已删除'})
+        else:
+            return jsonify({'error': '任务不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/<task_id>/download/<file_key>', methods=['GET'])
+def ml_download_prediction_file(task_id, file_key):
+    """下载预测结果Excel文件"""
+    try:
+        from backend.advanced_predictor import get_task_predictor
+        predictor = get_task_predictor(task_id)
+        if not predictor:
+            from backend.advanced_predictor import get_advanced_predictor
+            predictor = get_advanced_predictor()
+        task = predictor.get_task(task_id)
+
+        if not task:
+            return jsonify({'error': '任务不存在'}), 404
+
+        if file_key not in task.export_files:
+            return jsonify({'error': '文件不存在'}), 404
+
+        filepath = task.export_files[file_key]
+        if not os.path.exists(filepath):
+            return jsonify({'error': '文件已被删除'}), 404
+
+        filename = os.path.basename(filepath)
+        return send_file(
+            filepath,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/ml/models', methods=['GET'])
 def ml_get_models():
     try:
@@ -990,39 +1670,37 @@ def ml_get_models():
         result_models = []
         processed_ids = set()
 
-        def get_ensemble_key(model_name):
-            """提取ensemble key: 前缀 + ensemble_id (8位)"""
-            parts = model_name.rsplit('_', 2)
-            if len(parts) >= 3 and parts[-1].isdigit() and len(parts[-2]) == 8:
-                # 从parts[0]中移除模型类型，得到纯前缀
-                prefix_parts = parts[0].rsplit('_', 1)
-                if len(prefix_parts) >= 2:
-                    pure_prefix = prefix_parts[0]
-                    return pure_prefix + '_' + parts[-2]
-            return None
+        parent_groups = {}
+        for m in models:
+            parent_id = m.get('parent_model_id')
+            if parent_id:
+                if parent_id not in parent_groups:
+                    parent_groups[parent_id] = []
+                parent_groups[parent_id].append(m)
 
         for m in models:
             model_id = m.get('id')
-            model_name = m.get('model_name', '')
 
             if model_id in processed_ids:
                 continue
 
-            ensemble_key = get_ensemble_key(model_name)
-            if ensemble_key:
-                siblings = [x for x in models if get_ensemble_key(x.get('model_name', '')) == ensemble_key]
+            parent_id = m.get('parent_model_id')
+            if parent_id and parent_id in parent_groups:
+                siblings = parent_groups[parent_id]
                 if len(siblings) > 1:
                     model_types = [x.get('model_type', '') for x in siblings]
                     first_sibling = siblings[0]
                     result_models.append({
-                        'id': first_sibling.get('id'),
-                        'model_name': ensemble_key,
+                        'id': parent_id,
+                        'model_name': first_sibling.get('model_name', '').rsplit('_', 2)[0],
                         'model_type': f'集成({", ".join(model_types)})',
                         'stock_code': first_sibling.get('stock_code', ''),
                         'mode': first_sibling.get('mode', 'classification'),
                         'is_ensemble': True,
                         'sub_models': [{'id': x.get('id'), 'model_type': x.get('model_type', '')} for x in siblings],
-                        'created_at': first_sibling.get('created_at', '')
+                        'created_at': first_sibling.get('created_at', ''),
+                        'features': first_sibling.get('features', []),
+                        'feature_count': len(first_sibling.get('features', []))
                     })
                     for sib in siblings:
                         processed_ids.add(sib.get('id'))
@@ -1066,17 +1744,53 @@ def ml_get_train_progress(task_id):
 
 @app.route('/api/ml/train/stop/<task_id>', methods=['POST'])
 def ml_stop_train(task_id):
-    if task_id in training_threads:
-        thread = training_threads[task_id]
-        thread_id = thread.ident
-        import ctypes
-        import inspect
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(thread_id, ctypes.py_object(SystemExit))
-        training_tasks[task_id] = {'progress': 0, 'status': '已停止', 'message': '用户手动停止'}
-        if task_id in training_threads:
-            del training_threads[task_id]
-        return jsonify({'status': 'stopped', 'task_id': task_id})
+    if task_id in training_tasks:
+        training_tasks[task_id]['stopped'] = True
+        training_tasks[task_id]['status'] = 'stopped'
+        training_tasks[task_id]['message'] = '训练任务已停止'
+        return jsonify({'status': 'stopping', 'task_id': task_id})
     return jsonify({'status': 'not_found', 'message': '任务不存在'}), 404
+
+@app.route('/api/ml/train/tasks', methods=['GET'])
+def ml_get_train_tasks():
+    """获取所有训练任务列表"""
+    tasks_list = []
+    for task_id, task_info in training_tasks.items():
+        task_data = {
+            'task_id': task_id,
+            'status': task_info.get('status', 'unknown'),
+            'progress': task_info.get('progress', 0),
+            'message': task_info.get('message', ''),
+            'start_time': task_info.get('start_time'),
+            'end_time': task_info.get('end_time'),
+            'elapsed_time': task_info.get('elapsed_time'),
+            'total_count': task_info.get('total_tasks', task_info.get('total_count', 0)),
+            'processed_count': task_info.get('current_task_index', task_info.get('processed_count', 0)),
+            'success_count': task_info.get('success_count', 0),
+            'fail_count': task_info.get('fail_count', 0),
+            'current_stock': task_info.get('current_stock'),
+            'type': task_info.get('type', 'batch'),
+            'mode': task_info.get('train_mode', 'thread'),
+            'stocks': task_info.get('stocks', []),
+            'params': task_info.get('params', {})
+        }
+        tasks_list.append(task_data)
+    
+    # 按创建时间倒序排列
+    tasks_list.sort(key=lambda x: x.get('start_time') or '', reverse=True)
+    
+    return jsonify({'tasks': tasks_list})
+
+@app.route('/api/ml/train/tasks/<task_id>', methods=['DELETE'])
+def ml_delete_train_task(task_id):
+    """删除训练任务"""
+    if task_id in training_tasks:
+        task = training_tasks[task_id]
+        if task.get('status') == 'running':
+            return jsonify({'error': '无法删除运行中的任务'}), 400
+        del training_tasks[task_id]
+        return jsonify({'status': 'deleted', 'task_id': task_id})
+    return jsonify({'error': '任务不存在'}), 404
 
 @app.route('/api/ml/features', methods=['GET'])
 def ml_get_features():
@@ -1345,6 +2059,449 @@ def handle_stop_backtest(data):
             engine.stop()
             socketio.emit('backtest_stopped', {'task_id': task_id}, room=client_id)
             print(f"[停止成功] task_id={task_id}")
+
+
+# ==================== 因子缓存管理 API ====================
+
+# 因子缓存任务存储
+factor_cache_tasks = {}
+factor_cache_threads = {}
+
+
+def _run_factor_cache_task(task_id, task_type, stock_codes=None, mode='thread'):
+    """后台线程执行因子缓存任务
+    
+    Args:
+        task_id: 任务ID
+        task_type: 'full' 或 'incremental'
+        stock_codes: 股票列表，None表示全部
+        mode: 运行模式 - 'single'(单线程) / 'process'(多进程) / 'thread'(多线程)
+    """
+    import time
+    import traceback
+    
+    # 日志函数
+    def log(msg):
+        print(f'[因子缓存] {msg}', flush=True)
+        # 同时写入文件
+        with open('./factor_cache.log', 'a', encoding='utf-8') as f:
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {msg}\n')
+    
+    log(f'任务 {task_id} 启动，类型: {task_type}, 模式: {mode}')
+    
+    task = factor_cache_tasks.get(task_id)
+    if not task:
+        log(f'任务 {task_id} 不存在')
+        return
+    
+    task['status'] = 'running'
+    task['start_time'] = time.time()
+    task['message'] = '初始化数据提供器...'
+    
+    try:
+        log('导入模块...')
+        from backend.factor_cache import FactorCacheManager
+        from backend.providers import ProviderFactory
+        from backend.config import DataSourceConfig
+        
+        # 创建数据提供器
+        log('创建数据提供器...')
+        # 获取项目根目录（backend的上级目录）
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_path = os.path.join(project_root, 'data')
+        log(f'数据路径: {data_path}')
+        
+        provider = ProviderFactory.create_provider('local', data_path=data_path)
+        
+        if not provider.is_available():
+            raise Exception(f'数据提供器不可用: {provider.get_error_message()}')
+        
+        log('数据提供器可用')
+        cache_manager = FactorCacheManager()
+        
+        # 获取股票列表
+        log('获取股票列表...')
+        if stock_codes is None:
+            stock_codes = provider.get_available_stocks()
+        
+        log(f'找到 {len(stock_codes)} 只股票，运行模式: {mode}')
+        
+        task['total_count'] = len(stock_codes)
+        task['processed_count'] = 0
+        task['success_count'] = 0
+        task['fail_count'] = 0
+        task['mode'] = mode
+        
+        # 多进程或多线程模式
+        if mode in ('process', 'thread'):
+            task['message'] = f'使用{mode}模式处理 {len(stock_codes)} 只股票...'
+            log(f'使用批量更新模式: {mode}')
+            
+            # 加载所有股票数据
+            stock_data_map = {}
+            for stock_code in stock_codes:
+                if task.get('stopped'):
+                    task['status'] = 'stopped'
+                    task['message'] = '任务已停止'
+                    return
+                try:
+                    raw_data = provider.get_stock_data(stock_code)
+                    if raw_data is not None and len(raw_data) >= 50:
+                        stock_data_map[stock_code] = raw_data
+                except Exception as e:
+                    log(f'加载 {stock_code} 数据失败: {e}')
+            
+            log(f'成功加载 {len(stock_data_map)} 只股票数据')
+            
+            # 处理 technical 库
+            task['message'] = '处理 technical 因子库...'
+            log('开始处理 technical 库')
+            
+            # 创建线程停止事件（用于多线程模式）
+            from threading import Event
+            stop_event = Event()
+            
+            def progress_callback(completed, total, stock_code, status):
+                task['processed_count'] = completed
+                task['progress'] = int(completed / total * 100)
+                task['current_stock'] = stock_code
+                # 返回是否停止
+                return task.get('stopped', False)
+            
+            if mode == 'process':
+                result_tech = cache_manager.batch_incremental_update(
+                    stock_data_map, 'technical', progress_callback=progress_callback, data_path=data_path,
+                    force_full=(task_type == 'full')
+                )
+            else:  # thread
+                result_tech = cache_manager.batch_incremental_update_threaded(
+                    stock_data_map, 'technical', progress_callback=progress_callback, stop_event=stop_event,
+                    force_full=(task_type == 'full')
+                )
+            
+            # 检查是否停止
+            if task.get('stopped'):
+                task['status'] = 'stopped'
+                task['message'] = '任务已停止'
+                return
+            
+            log(f'technical 库完成: 成功{len(result_tech["success"])}, 失败{len(result_tech["failed"])}')
+            
+            # 处理 alpha191 库
+            task['message'] = '处理 alpha191 因子库...'
+            log('开始处理 alpha191 库')
+            
+            if mode == 'process':
+                result_alpha = cache_manager.batch_incremental_update(
+                    stock_data_map, 'alpha191', progress_callback=progress_callback, data_path=data_path,
+                    force_full=(task_type == 'full')
+                )
+            else:  # thread
+                result_alpha = cache_manager.batch_incremental_update_threaded(
+                    stock_data_map, 'alpha191', progress_callback=progress_callback, stop_event=stop_event,
+                    force_full=(task_type == 'full')
+                )
+            
+            log(f'alpha191 库完成: 成功{len(result_alpha["success"])}, 失败{len(result_alpha["failed"])}')
+            
+            task['success_count'] = len(result_tech['success']) + len(result_alpha['success'])
+            task['fail_count'] = len(result_tech['failed']) + len(result_alpha['failed'])
+            
+        else:  # single 单线程模式
+            task['message'] = f'单线程模式处理 {len(stock_codes)} 只股票...'
+            log('使用单线程模式')
+            
+            for i, stock_code in enumerate(stock_codes):
+                if task.get('stopped'):
+                    task['status'] = 'stopped'
+                    task['message'] = '任务已停止'
+                    return
+                
+                task['current_stock'] = stock_code
+                
+                try:
+                    # 加载数据
+                    raw_data = provider.get_stock_data(stock_code)
+                    
+                    if raw_data is None or len(raw_data) < 50:
+                        task['fail_count'] += 1
+                        continue
+                    
+                    # 判断每个因子库的更新类型
+                    update_types = {}
+                    for lib in ['technical', 'alpha191']:
+                        if task_type == 'full':
+                            # 全量模式强制全量更新
+                            update_types[lib] = 'full'
+                        else:
+                            # 智能判断更新类型
+                            update_types[lib] = cache_manager.get_cache_update_type(
+                                stock_code, raw_data, lib
+                            )
+                    
+                    # 检查是否需要处理
+                    if all(t == 'none' for t in update_types.values()):
+                        task['success_count'] += 1
+                        task['message'] = f'{stock_code} 已最新，跳过 ({i+1}/{len(stock_codes)})'
+                        continue
+                    
+                    task['message'] = f'正在处理 {stock_code} ({i+1}/{len(stock_codes)})...'
+                    
+                    # 根据更新类型处理
+                    for lib in ['technical', 'alpha191']:
+                        update_type = update_types[lib]
+                        
+                        if update_type == 'none':
+                            continue  # 跳过
+                        elif update_type == 'full':
+                            cache_manager.compute_and_save(stock_code, raw_data, lib)
+                        else:  # incremental
+                            cache_manager.incremental_update(stock_code, raw_data, lib)
+                    
+                    task['success_count'] += 1
+                    
+                except Exception as e:
+                    print(f'[因子缓存] {stock_code} 处理失败: {e}')
+                    task['fail_count'] += 1
+                
+                task['processed_count'] = i + 1
+                task['progress'] = int((i + 1) / len(stock_codes) * 100)
+        
+        task['status'] = 'completed'
+        task['message'] = f'完成！成功: {task["success_count"]}, 失败: {task["fail_count"]}'
+        task['end_time'] = time.time()
+        task['elapsed_time'] = task['end_time'] - task['start_time']
+        
+    except Exception as e:
+        task['status'] = 'failed'
+        task['message'] = f'任务失败: {str(e)}'
+        task['error'] = str(e)
+        task['end_time'] = time.time()
+        traceback.print_exc()
+
+
+@app.route('/api/factor-cache/status', methods=['GET'])
+def factor_cache_status():
+    """获取因子缓存状态"""
+    try:
+        from backend.factor_cache import FactorCacheManager
+        
+        cache_manager = FactorCacheManager()
+        stats = cache_manager.get_global_stats()
+        
+        return jsonify(stats)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            'stock_count': 0,
+            'total_size_mb': 0,
+            'coverage': 0,
+            'libraries': {},
+            'last_update': None,
+            'error': str(e)
+        })
+
+
+@app.route('/api/factor-cache/tasks', methods=['GET'])
+def factor_cache_tasks_list():
+    """获取因子缓存任务列表"""
+    try:
+        tasks_list = []
+        for task_id, task in factor_cache_tasks.items():
+            task_info = {
+                'task_id': task_id,
+                'type': task.get('type', 'incremental'),
+                'status': task.get('status', 'pending'),
+                'mode': task.get('mode', 'thread'),
+                'force': task.get('force', False),
+                'stocks': task.get('stocks'),
+                'progress': task.get('progress', 0),
+                'total_count': task.get('total_count', 0),
+                'processed_count': task.get('processed_count', 0),
+                'success_count': task.get('success_count', 0),
+                'fail_count': task.get('fail_count', 0),
+                'current_stock': task.get('current_stock', ''),
+                'message': task.get('message', ''),
+                'start_time': task.get('start_time'),
+                'end_time': task.get('end_time'),
+                'elapsed_time': task.get('elapsed_time')
+            }
+            tasks_list.append(task_info)
+        
+        # 按开始时间倒序排列
+        tasks_list.sort(key=lambda x: x.get('start_time') or 0, reverse=True)
+        
+        return jsonify({'tasks': tasks_list})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'tasks': [], 'error': str(e)})
+
+
+@app.route('/api/factor-cache/update', methods=['POST'])
+def factor_cache_update():
+    """启动缓存更新任务（增量/全量统一）
+    
+    请求参数:
+        mode: 运行模式 - 'single'(单线程) / 'process'(多进程) / 'thread'(多线程，默认)
+        stocks: 股票代码列表，如 ['000001.SZ', '600000.SH']，不传则更新所有股票
+        force: 是否强制重新生成 - true(全量更新) / false(智能增量，默认)
+    """
+    import uuid
+    
+    # 检查是否有正在运行的任务
+    for task_id, task in factor_cache_tasks.items():
+        if task.get('status') == 'running':
+            return jsonify({
+                'error': '已有正在运行的任务，请先停止或等待完成',
+                'running_task_id': task_id
+            }), 400
+    
+    task_id = uuid.uuid4().hex[:8]
+    
+    try:
+        # 获取请求参数
+        data = request.get_json() or {}
+        mode = data.get('mode', 'thread')
+        stocks = data.get('stocks')  # 股票列表
+        force = data.get('force', False)  # 是否强制重新生成
+        
+        # 验证 mode 参数
+        if mode not in ('single', 'process', 'thread'):
+            return jsonify({
+                'error': f'无效的 mode 参数: {mode}，可选值: single, process, thread'
+            }), 400
+        
+        # 验证 stocks 参数
+        if stocks is not None and not isinstance(stocks, list):
+            return jsonify({
+                'error': 'stocks 参数必须是数组格式'
+            }), 400
+        
+        # 确定任务类型
+        task_type = 'full' if force else 'incremental'
+        
+        factor_cache_tasks[task_id] = {
+            'task_id': task_id,
+            'type': task_type,
+            'status': 'pending',
+            'mode': mode,
+            'stocks': stocks,
+            'force': force,
+            'progress': 0,
+            'message': f'等待开始 ({mode}模式, {task_type})...',
+            'created_at': time.time()
+        }
+        
+        # 启动后台线程
+        import os
+        log_msg = f'[API] 准备启动后台线程，task_id={task_id}, mode={mode}, type={task_type}'
+        if stocks:
+            log_msg += f', stocks={len(stocks)}只'
+        print(log_msg, flush=True)
+        with open('./factor_cache.log', 'a', encoding='utf-8') as f:
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {log_msg}\n')
+        
+        thread = threading.Thread(
+            target=_run_factor_cache_task,
+            args=(task_id, task_type, stocks, mode)
+        )
+        thread.daemon = True
+        factor_cache_threads[task_id] = thread
+        thread.start()
+        
+        log_msg = f'[API] 后台线程已启动，task_id={task_id}'
+        print(log_msg, flush=True)
+        with open('./factor_cache.log', 'a', encoding='utf-8') as f:
+            f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")} {log_msg}\n')
+        
+        return jsonify({
+            'task_id': task_id,
+            'status': 'started',
+            'mode': mode,
+            'type': task_type,
+            'stocks_count': len(stocks) if stocks else 'all',
+            'message': f'缓存更新任务已启动 ({mode}模式, {task_type})'
+        })
+        
+    except Exception as e:
+        traceback.print_exc()
+        if task_id in factor_cache_tasks:
+            del factor_cache_tasks[task_id]
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/factor-cache/tasks/<task_id>', methods=['GET', 'DELETE'])
+def factor_cache_task_handler(task_id):
+    """处理单个任务 - 获取状态或删除"""
+    try:
+        if request.method == 'GET':
+            # 获取任务状态
+            if task_id not in factor_cache_tasks:
+                return jsonify({'error': '任务不存在'}), 404
+            
+            task = factor_cache_tasks[task_id]
+            return jsonify({
+                'task_id': task_id,
+                'status': task.get('status'),
+                'progress': task.get('progress', 0),
+                'current_stock': task.get('current_stock', ''),
+                'message': task.get('message', ''),
+                'created_at': task.get('created_at'),
+                'updated_at': task.get('updated_at'),
+                'success_count': task.get('success_count', 0),
+                'fail_count': task.get('fail_count', 0),
+                'error': task.get('error')
+            })
+        
+        elif request.method == 'DELETE':
+            # 删除任务
+            if task_id not in factor_cache_tasks:
+                return jsonify({'error': '任务不存在'}), 404
+            
+            task = factor_cache_tasks[task_id]
+            if task.get('status') == 'running':
+                return jsonify({'error': '无法删除运行中的任务，请先停止'}), 400
+            
+            del factor_cache_tasks[task_id]
+            if task_id in factor_cache_threads:
+                del factor_cache_threads[task_id]
+            
+            return jsonify({
+                'task_id': task_id,
+                'status': 'deleted'
+            })
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/factor-cache/tasks/<task_id>/stop', methods=['POST'])
+def factor_cache_stop_task(task_id):
+    """停止因子缓存任务"""
+    try:
+        if task_id not in factor_cache_tasks:
+            return jsonify({'error': '任务不存在'}), 404
+        
+        task = factor_cache_tasks[task_id]
+        if task.get('status') != 'running':
+            return jsonify({'error': '任务不在运行状态'}), 400
+        
+        task['stopped'] = True
+        
+        return jsonify({
+            'task_id': task_id,
+            'status': 'stopping',
+            'message': '任务正在停止...'
+        })
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 因子缓存管理 API 结束 ====================
+
 
 if __name__ == '__main__':
     print("=" * 50)

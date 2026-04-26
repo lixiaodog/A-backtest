@@ -148,7 +148,7 @@ class Alpha191:
 
     def alpha_009(self, df):
         close = df['close']
-        delta_close = self._delta(close, 1)
+        delta_close = self._delta(close, 1) / close  # 转换为相对变化率
         cond1 = delta_close > 0
         cond2 = delta_close < 0
         return self._where(cond1, delta_close,
@@ -172,7 +172,7 @@ class Alpha191:
     def alpha_012(self, df):
         volume = df['volume']
         close = df['close']
-        return self._sign(self._delta(volume, 1)) * -1 * self._delta(close, 1)
+        return self._sign(self._delta(volume, 1)) * -1 * self._delta(close, 1) / close  # 转换为相对变化率
 
     def alpha_013(self, df):
         volume = df['volume']
@@ -247,7 +247,7 @@ class Alpha191:
         close = df['close']
         high = df['high']
         cond = self._mean(high, 20) < high
-        return self._where(cond, -1 * self._delta(high, 2), 0)
+        return self._where(cond, -1 * self._delta(high, 2) / close, 0)  # 转换为相对变化率
 
     def alpha_024(self, df):
         close = df['close']
@@ -255,7 +255,7 @@ class Alpha191:
         delta100 = self._delta(mean100, 100)
         delay100 = self._delay(close, 100)
         cond = ((delta100 / delay100) < 0.05) | ((delta100 / delay100) == 0.05)
-        return self._where(cond, -1 * (close - self._ts_min(close, 100)), -1 * self._delta(close, 3))
+        return self._where(cond, -1 * (close - self._ts_min(close, 100)) / close, -1 * self._delta(close, 3) / close)  # 转换为相对变化率
 
     def alpha_025(self, df):
         close = df['close']
@@ -391,7 +391,8 @@ class Alpha191:
         high = df['high']
         low = df['low']
         vwap = self._get_vwap(df)
-        return self._rank((vwap - close) ** 0.5) - vwap
+        diff = vwap - close
+        return self._rank(np.sign(diff) * np.sqrt(np.abs(diff))) - vwap
 
     def alpha_042(self, df):
         close = df['close']
@@ -422,7 +423,7 @@ class Alpha191:
         close = df['close']
         cond = 0.25 < (((self._delay(close, 20) - self._delay(close, 10)) / 10) -
                       ((self._delay(close, 10) - close) / 10))
-        return self._where(cond, -1 * (close - self._ts_min(close, 20)), -1 * self._delta(close, 3))
+        return self._where(cond, -1 * (close - self._ts_min(close, 20)) / close, -1 * self._delta(close, 3) / close)  # 转换为相对变化率
 
     def alpha_047(self, df):
         close = df['close']
@@ -435,7 +436,7 @@ class Alpha191:
     def alpha_048(self, df):
         close = df['close']
         cond = (self._delay(close, 1) / self._mean(close, 100)) - 1
-        return self._where(cond > 0.25, -1 * self._delta(close, 2), -1 * self._ts_min(close, 20))
+        return self._where(cond > 0.25, -1 * self._delta(close, 2) / close, -1 * self._ts_min(close, 20) / close)  # 转换为相对变化率
 
     def alpha_049(self, df):
         close = df['close']
@@ -1489,12 +1490,18 @@ class Alpha191:
         return -1 * self._rank(close - vwap) * self._rank(self._delta(close, 10))
 
     def get_all_alphas(self, df):
-        result = pd.DataFrame(index=df.index)
+        """
+        计算所有Alpha因子
+        
+        使用字典收集数据避免DataFrame内存碎片警告
+        """
+        data = {}
         for i in range(1, 192):
             try:
                 alpha_method = getattr(self, f'alpha_{i:03d}', None)
                 if alpha_method:
-                    result[f'alpha_{i:03d}'] = alpha_method(df)
+                    data[f'alpha_{i:03d}'] = alpha_method(df)
             except Exception:
                 pass
-        return result
+        # 一次性创建DataFrame，避免内存碎片
+        return pd.DataFrame(data, index=df.index)

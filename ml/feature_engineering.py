@@ -75,7 +75,62 @@ class FeatureEngineer:
         self._scaler.n_features_in_ = params['n_features_in_']
         self._scaler_fitted = True
 
-    def _compute_features(self, df: pd.DataFrame, feature_names: list) -> pd.DataFrame:
+    def _try_load_from_cache(self, stock_code, date_index, alpha_features, technical_features, use_all_alpha, strict_mode=False):
+        """尝试从因子缓存读取数据
+        
+        Args:
+            strict_mode: 严格模式，True时不回退，直接返回缓存数据（包括NaN）
+        """
+        try:
+            from backend.factor_cache import FactorCacheManager
+            manager = FactorCacheManager()
+
+            result = pd.DataFrame(index=date_index)
+
+            need_alpha = use_all_alpha or len(alpha_features) > 0
+            need_tech = len(technical_features) > 0
+
+            if need_alpha:
+                factor_names = None if use_all_alpha else alpha_features
+                alpha_df = manager.get_factors(stock_code, factor_names=factor_names, factor_library='alpha191')
+                if alpha_df.empty:
+                    if strict_mode:
+                        raise ValueError(f"股票 {stock_code} 的 alpha191 缓存数据不存在")
+                    return None
+                alpha_df = alpha_df.reindex(date_index)
+                if use_all_alpha:
+                    for col in alpha_df.columns:
+                        result[col] = alpha_df[col]
+                else:
+                    for name in alpha_features:
+                        if name in alpha_df.columns:
+                            result[name] = alpha_df[name]
+
+            if need_tech:
+                tech_df = manager.get_factors(stock_code, factor_names=technical_features, factor_library='technical')
+                if tech_df.empty:
+                    if strict_mode:
+                        raise ValueError(f"股票 {stock_code} 的 technical 缓存数据不存在")
+                    return None
+                tech_df = tech_df.reindex(date_index)
+                for name in technical_features:
+                    if name in tech_df.columns:
+                        result[name] = tech_df[name]
+
+            if result.empty:
+                if strict_mode:
+                    raise ValueError(f"股票 {stock_code} 的缓存数据为空")
+                return None
+
+            return result
+        except ValueError:
+            raise
+        except Exception as e:
+            if strict_mode:
+                raise ValueError(f"读取缓存失败: {e}")
+            return None
+
+    def _compute_features(self, df: pd.DataFrame, feature_names: list, stock_code: str = None, data_source: str = 'csv') -> pd.DataFrame:
         import sys
         result = pd.DataFrame(index=df.index)
         alpha_features = []
@@ -90,8 +145,49 @@ class FeatureEngineer:
             elif name in self.available_features:
                 technical_features.append(name)
 
-        print(f'[特征工程] 计算技术指标: {len(technical_features)} 个')
+        print(f'[特征工程] 计算技术指标: {len(technical_features)} 个, 数据源: {data_source}')
         sys.stdout.flush()
+
+        use_cache_mode = (data_source == 'cache')
+        
+        if stock_code:
+            strict_mode = use_cache_mode
+            try:
+                cache_result = self._try_load_from_cache(stock_code, df.index, alpha_features, technical_features, use_all_alpha, strict_mode=strict_mode)
+                if cache_result is not None:
+                    print(f'[特征工程] 从缓存加载因子数据: {cache_result.shape[1]} 个特征')
+                    sys.stdout.flush()
+                    result = cache_result
+                    result = result.replace([np.inf, -np.inf], np.nan)
+                    if use_cache_mode:
+                        print(f'[特征工程] 缓存模式: 填充空值')
+                        result = result.ffill().bfill()
+                        result = result.fillna(0)
+                        sys.stdout.flush()
+                    else:
+                        result = result.ffill().bfill()
+                        if result.iloc[-1].isna().any():
+                            result = result.ffill().bfill()
+                        result = result.fillna(0)
+                    result = result.astype(np.float32)
+                    result = result.clip(-1e10, 1e10)
+                    
+                    ordered_cols = [col for col in feature_names if col in result.columns]
+                    if len(ordered_cols) > 0:
+                        result = result[ordered_cols]
+                    
+                    return result
+                elif not use_cache_mode:
+                    print(f'[特征工程] 缓存不可用，回退到实时计算')
+                    sys.stdout.flush()
+            except ValueError as e:
+                if use_cache_mode:
+                    raise
+                print(f'[特征工程] 缓存读取失败: {e}，回退到实时计算')
+                sys.stdout.flush()
+
+        if use_cache_mode and stock_code:
+            raise ValueError(f"缓存模式下无法获取数据: stock_code={stock_code}")
 
         for i, name in enumerate(technical_features):
             result[name] = self.available_features[name](df)
@@ -121,9 +217,13 @@ class FeatureEngineer:
         result = result.astype(np.float32)
         result = result.clip(-1e10, 1e10)
 
+        ordered_cols = [col for col in feature_names if col in result.columns]
+        if len(ordered_cols) > 0:
+            result = result[ordered_cols]
+
         return result
 
-    def fit_transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+    def fit_transform(self, df: pd.DataFrame, feature_names: list = None, stock_code: str = None, data_source: str = 'csv') -> pd.DataFrame:
         import sys
         if feature_names is None:
             feature_names = self.get_available_features()
@@ -135,10 +235,24 @@ class FeatureEngineer:
         print(f'[特征工程] 开始计算 {len(feature_names)} 个特征...')
         sys.stdout.flush()
 
-        result = self._compute_features(df, feature_names)
+        result = self._compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
 
         if result.empty or result.shape[1] == 0:
             print(f'[特征工程] 没有有效特征数据，跳过标准化')
+            return result
+
+        # 删除整行都是空值或整行都是0的行
+        nan_count_before = len(result)
+        all_nan_mask = result.isna().all(axis=1)
+        all_zero_mask = (result == 0).all(axis=1)
+        result = result[~(all_nan_mask | all_zero_mask)]
+        nan_count_after = len(result)
+        if nan_count_before != nan_count_after:
+            print(f'[特征工程] 删除无效行(全空或全0): {nan_count_before} -> {nan_count_after} (删除 {nan_count_before - nan_count_after} 行)')
+            sys.stdout.flush()
+
+        if result.empty:
+            print(f'[特征工程] 删除无效行后无有效数据')
             return result
 
         print(f'[特征工程] 特征计算完成, 开始标准化...')
@@ -153,7 +267,7 @@ class FeatureEngineer:
 
         return result
 
-    def compute_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+    def compute_features(self, df: pd.DataFrame, feature_names: list = None, stock_code: str = None, data_source: str = 'csv') -> pd.DataFrame:
         import sys
         if feature_names is None:
             feature_names = self.get_available_features()
@@ -165,10 +279,24 @@ class FeatureEngineer:
         print(f'[特征工程] 开始计算 {len(feature_names)} 个特征（不归一化）...')
         sys.stdout.flush()
 
-        result = self._compute_features(df, feature_names)
+        result = self._compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
 
         if result.empty or result.shape[1] == 0:
             print(f'[特征工程] 没有有效特征数据')
+            return result
+
+        # 删除整行都是空值或整行都是0的行
+        nan_count_before = len(result)
+        all_nan_mask = result.isna().all(axis=1)
+        all_zero_mask = (result == 0).all(axis=1)
+        result = result[~(all_nan_mask | all_zero_mask)]
+        nan_count_after = len(result)
+        if nan_count_before != nan_count_after:
+            print(f'[特征工程] 删除无效行(全空或全0): {nan_count_before} -> {nan_count_after} (删除 {nan_count_before - nan_count_after} 行)')
+            sys.stdout.flush()
+
+        if result.empty:
+            print(f'[特征工程] 删除无效行后无有效数据')
             return result
 
         print(f'[特征工程] 特征计算完成, 最终形状: {result.shape}')
@@ -176,26 +304,58 @@ class FeatureEngineer:
 
         return result
 
-    def transform(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+    def transform(self, df: pd.DataFrame, feature_names: list = None, stock_code: str = None, data_source: str = 'csv') -> pd.DataFrame:
+        import sys
         if feature_names is None:
             feature_names = self.get_available_features()
 
-        result = self._compute_features(df, feature_names)
+        result = self._compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
 
         if result.empty or result.shape[1] == 0:
             print(f'[特征工程] 没有有效特征数据')
             return result
 
+        # 删除整行都是空值或整行都是0的行
+        nan_count_before = len(result)
+        all_nan_mask = result.isna().all(axis=1)
+        all_zero_mask = (result == 0).all(axis=1)
+        result = result[~(all_nan_mask | all_zero_mask)]
+        nan_count_after = len(result)
+        if nan_count_before != nan_count_after:
+            print(f'[特征工程] 删除无效行(全空或全0): {nan_count_before} -> {nan_count_after} (删除 {nan_count_before - nan_count_after} 行)')
+            sys.stdout.flush()
+
+        if result.empty:
+            print(f'[特征工程] 删除无效行后无有效数据')
+            return result
+
+        print(f'[特征工程] 特征计算完成, 开始标准化...')
+        sys.stdout.flush()
+
         if self._scaler_fitted:
-            scaled_values = self._scaler.transform(result)
+            if self._scaler.mean_ is not None and len(self._scaler.mean_) == result.shape[1]:
+                saved_scaled = self._scaler.transform(result)
+                result = pd.DataFrame(saved_scaled, index=result.index, columns=result.columns)
+            else:
+                print(f'[特征工程] 保存的scaler参数维度不匹配，使用局部归一化')
+                sys.stdout.flush()
+                local_scaler = StandardScaler()
+                local_scaled = local_scaler.fit_transform(result)
+                result = pd.DataFrame(local_scaled, index=result.index, columns=result.columns)
+        else:
+            scaled_values = self._scaler.fit_transform(result)
+            self._scaler_fitted = True
             result = pd.DataFrame(scaled_values, index=result.index, columns=result.columns)
+
+        print(f'[特征工程] 标准化完成, 最终形状: {result.shape}')
+        sys.stdout.flush()
 
         return result
 
-    def calculate_features(self, df: pd.DataFrame, feature_names: list = None) -> pd.DataFrame:
+    def calculate_features(self, df: pd.DataFrame, feature_names: list = None, stock_code: str = None, data_source: str = 'csv') -> pd.DataFrame:
         if self._scaler_fitted:
-            return self.transform(df, feature_names)
-        return self.fit_transform(df, feature_names)
+            return self.transform(df, feature_names, stock_code=stock_code, data_source=data_source)
+        return self.fit_transform(df, feature_names, stock_code=stock_code, data_source=data_source)
 
     def generate_labels(self, df: pd.DataFrame, horizon: int = 5, threshold: float = 0.02) -> pd.Series:
         future_returns = df['close'].shift(-horizon) / df['close'] - 1
@@ -204,19 +364,16 @@ class FeatureEngineer:
 
     def generate_labels_by_volatility(self, df: pd.DataFrame, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8) -> pd.Series:
         future_returns = df['close'].shift(-horizon) / df['close'] - 1
-        returns = df['close'].pct_change()
-
-        rolling_vol = returns.rolling(window=vol_window).std()
-        vol_rolling = rolling_vol.rolling(window=vol_window).mean()
-
-        lower_threshold = vol_rolling.quantile(lower_q)
-        upper_threshold = vol_rolling.quantile(upper_q)
-
+        
+        # 使用未来收益率的分位数作为阈值，确保标签分布均衡
+        lower_threshold = future_returns.quantile(lower_q)
+        upper_threshold = future_returns.quantile(upper_q)
+        
         labels = pd.Series(index=future_returns.index, dtype=int)
         labels[future_returns < lower_threshold] = 0
         labels[(future_returns >= lower_threshold) & (future_returns <= upper_threshold)] = 1
         labels[future_returns > upper_threshold] = 2
-
+        
         return labels
 
     def generate_labels_multi(self, df: pd.DataFrame, horizon: int = 5, lower_q: float = 0.1, mid_low_q: float = 0.3, mid_high_q: float = 0.7, upper_q: float = 0.9) -> pd.Series:
@@ -241,8 +398,8 @@ class FeatureEngineer:
 
         return labels
 
-    def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02, normalize: bool = True):
-        features = self.compute_features(df, feature_names)
+    def prepare_data(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, threshold: float = 0.02, normalize: bool = True, stock_code: str = None, data_source: str = 'csv'):
+        features = self.compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
         labels = self.generate_labels(df, horizon, threshold)
 
         aligned_labels = labels.loc[features.index]
@@ -264,8 +421,8 @@ class FeatureEngineer:
         self._scaler_fitted = True
         return pd.DataFrame(scaled_values, index=X.index, columns=X.columns)
 
-    def prepare_data_with_volatility(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8, normalize: bool = True):
-        features = self.compute_features(df, feature_names)
+    def prepare_data_with_volatility(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, vol_window: int = 20, lower_q: float = 0.2, upper_q: float = 0.8, normalize: bool = True, stock_code: str = None, data_source: str = 'csv'):
+        features = self.compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
         labels = self.generate_labels_by_volatility(df, horizon, vol_window, lower_q, upper_q)
 
         aligned_labels = labels.loc[features.index]
@@ -280,10 +437,10 @@ class FeatureEngineer:
 
         return X, y
 
-    def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9, normalize: bool = True):
+    def prepare_data_multi(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, lower_q: float = 0.1, upper_q: float = 0.9, normalize: bool = True, stock_code: str = None, data_source: str = 'csv'):
         mid_low_q = lower_q + (upper_q - lower_q) / 3
         mid_high_q = lower_q + 2 * (upper_q - lower_q) / 3
-        features = self.compute_features(df, feature_names)
+        features = self.compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
         labels = self.generate_labels_multi(df, horizon, lower_q, mid_low_q, mid_high_q, upper_q)
 
         aligned_labels = labels.loc[features.index]
@@ -301,8 +458,8 @@ class FeatureEngineer:
     def generate_labels_regression(self, df: pd.DataFrame, horizon: int = 5) -> pd.Series:
         return df['close'].shift(-horizon) / df['close'] - 1
 
-    def prepare_data_regression(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, normalize: bool = True):
-        features = self.compute_features(df, feature_names)
+    def prepare_data_regression(self, df: pd.DataFrame, feature_names: list = None, horizon: int = 5, normalize: bool = True, stock_code: str = None, data_source: str = 'csv'):
+        features = self.compute_features(df, feature_names, stock_code=stock_code, data_source=data_source)
         labels = self.generate_labels_regression(df, horizon)
 
         aligned_labels = labels.loc[features.index]
@@ -319,12 +476,12 @@ class FeatureEngineer:
 
     def _ma(self, period):
         def func(df):
-            return df['close'].rolling(window=period).mean()
+            return df['close'].rolling(window=period).mean() / df['close']
         return func
 
     def _ema(self, period):
         def func(df):
-            return df['close'].ewm(span=period, adjust=False).mean()
+            return df['close'].ewm(span=period, adjust=False).mean() / df['close']
         return func
 
     @property
@@ -376,14 +533,14 @@ class FeatureEngineer:
         middle = self._ma(period)
         std = lambda df: df['close'].rolling(window=period).std()
         def func(df):
-            mid = middle(df)
+            mid = middle(df) * df['close']  # middle已经是相对值，需要乘以close得到真实值
             s = std(df)
             if band == 'upper':
-                return mid + std_dev * s
+                return (mid + std_dev * s) / df['close']
             elif band == 'middle':
-                return mid
+                return mid / df['close']
             else:
-                return mid - std_dev * s
+                return (mid - std_dev * s) / df['close']
         return func
 
     @property
@@ -416,7 +573,7 @@ class FeatureEngineer:
             high_close = (df['high'] - df['close'].shift()).abs()
             low_close = (df['low'] - df['close'].shift()).abs()
             tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-            return tr.rolling(window=period).mean()
+            return tr.rolling(window=period).mean() / df['close']
         return func
 
     @property

@@ -13,5 +13,19 @@ results/
 data/
 models/
 scripts/
+exports/
 .trae/
 *.log
+
+# Test files
+test_*.py
+test_*.xlsx
+*.tmp
+*.temp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

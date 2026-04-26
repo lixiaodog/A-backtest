@@ -13,13 +13,14 @@ def get_stock_info(stock_code):
         return {'code': stock_code, 'name': stock_code}
 
 
-def get_realtime_data(stock_code, period='1d', days=300):
+def get_realtime_data(stock_code, period='1d', days=300, end_date=None):
     """从AKShare获取股票数据
 
     Args:
         stock_code: 股票代码，如 '000001'
         period: 周期，'1d'日线, '1w'周线, '1m'月线
         days: 获取最近多少天的数据
+        end_date: 结束日期，格式YYYYMMDD，如果指定则使用该日期
 
     Returns:
         DataFrame with columns: open, high, low, close, volume
@@ -28,17 +29,21 @@ def get_realtime_data(stock_code, period='1d', days=300):
         market = 'sz' if stock_code.startswith(('000', '001', '002', '003', '300')) else 'sh'
         symbol = f'{market}{stock_code}'
 
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+        if end_date:
+            query_end_date = end_date
+            start_date = (datetime.strptime(end_date, '%Y%m%d') - timedelta(days=days)).strftime('%Y%m%d')
+        else:
+            query_end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
 
         if period == '1d':
-            df = ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=end_date, adjust='qfq')
+            df = ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=query_end_date, adjust='qfq')
         elif period == '1w':
-            df = ak.stock_zh_a_hist(symbol=symbol, period='weekly', start_date=start_date, end_date=end_date, adjust='qfq')
+            df = ak.stock_zh_a_hist(symbol=symbol, period='weekly', start_date=start_date, end_date=query_end_date, adjust='qfq')
         elif period == '1m':
-            df = ak.stock_zh_a_hist(symbol=symbol, period='monthly', start_date=start_date, end_date=end_date, adjust='qfq')
+            df = ak.stock_zh_a_hist(symbol=symbol, period='monthly', start_date=start_date, end_date=query_end_date, adjust='qfq')
         else:
-            df = ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=end_date, adjust='qfq')
+            df = ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=query_end_date, adjust='qfq')
 
         if df is None or not isinstance(df, pd.DataFrame) or len(df) == 0:
             print(f'[AKShare] 获取 {stock_code} 数据为空')

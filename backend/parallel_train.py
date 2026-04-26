@@ -28,20 +28,23 @@ def _process_single_stock(args):
         prepare_func = params['prepare_func']
 
         if prepare_func == 'prepare_data_regression':
-            X, y = feature_engineer.prepare_data_regression(raw_data, params['features'], params['horizon'])
+            X, y = feature_engineer.prepare_data_regression(raw_data, params['features'], params['horizon'], normalize=False, stock_code=stock_code, data_source=params.get('data_source', 'csv'))
         elif prepare_func == 'prepare_data_with_volatility':
             X, y = feature_engineer.prepare_data_with_volatility(
                 raw_data, params['features'], params['horizon'],
-                params['vol_window'], params['lower_q'], params['upper_q']
+                params['vol_window'], params['lower_q'], params['upper_q'],
+                normalize=False, stock_code=stock_code, data_source=params.get('data_source', 'csv')
             )
         elif prepare_func == 'prepare_data_multi':
             X, y = feature_engineer.prepare_data_multi(
                 raw_data, params['features'], params['horizon'],
-                params['lower_q'], params['upper_q']
+                params['lower_q'], params['upper_q'],
+                normalize=False, stock_code=stock_code, data_source=params.get('data_source', 'csv')
             )
         else:
             X, y = feature_engineer.prepare_data(
-                raw_data, params['features'], params['horizon'], params['threshold']
+                raw_data, params['features'], params['horizon'], params['threshold'],
+                normalize=False, stock_code=stock_code, data_source=params.get('data_source', 'csv')
             )
 
         if X is None or len(X) < 50:
@@ -71,7 +74,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     if task_id and training_tasks:
         training_tasks[task_id] = {
             'progress': 5,
-            'status': '并行处理...',
+            'status': 'running',
             'message': f'使用多进程处理 {total_stocks} 只股票'
         }
         print(f'[多进程训练] 任务ID: {task_id} - 启动多进程处理')
@@ -80,7 +83,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     tasks = [(stock, params) for stock in stock_list]
 
     cpu_count = os.cpu_count() or 4
-    num_processes = max(1, min(cpu_count - 2, len(stock_list)))
+    num_processes = int(max(1, min(cpu_count / 2, len(stock_list))))
     print(f'[多进程训练] CPU核心: {cpu_count}，使用 {num_processes} 个进程处理 {len(stock_list)} 只股票')
 
     completed = [0]
@@ -94,9 +97,19 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
                 progress = int(5 + (completed[0] / total) * 50)
                 training_tasks[task_id] = {
                     'progress': progress,
-                    'status': f'并行处理 ({completed[0]}/{total})',
-                    'message': f'已处理 {completed[0]} 只股票'
+                    'status': "running",
+                    'message': f'已处理 {completed[0]}/{total} 只股票'
                 }
+                if training_tasks[task_id].get('stopped', False):
+                    print(f'[多进程训练] 收到停止信号，终止进程池')
+                    pool.terminate()
+                    pool.join()
+                    training_tasks[task_id] = {
+                        'progress': 0,
+                        'status': 'completed',
+                        'message': '用户手动停止'
+                    }
+                    return
             results.append(result)
 
     process_time = time.time() - start_time
@@ -116,7 +129,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
         if task_id and training_tasks:
             training_tasks[task_id] = {
                 'progress': 0,
-                'status': '失败',
+                'status': 'completed',
                 'message': '没有足够的有效数据'
             }
         return
@@ -124,7 +137,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     if task_id and training_tasks:
         training_tasks[task_id] = {
             'progress': 55,
-            'status': '合并数据...',
+            'status': 'running',
             'message': f'成功处理 {len(all_X)} 只股票，合并特征数据'
         }
 
@@ -135,6 +148,29 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     total_time = time.time() - start_time
     print(f'[多进程训练] 数据合并完成，总样本: {total_samples}，总耗时: {total_time:.2f}秒')
     print(f'[多进程训练] 股票样本分布: {stock_sample_counts}')
+
+    if task_id and training_tasks:
+        training_tasks[task_id] = {
+            'progress': 58,
+            'status': 'running',
+            'message': f'对 {X.shape[1]} 个特征进行归一化'
+        }
+
+    from sklearn.preprocessing import StandardScaler
+    import numpy as np
+    
+    feature_names = list(X.columns)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X = pd.DataFrame(X_scaled, columns=feature_names)
+    
+    scaler_params = {
+        'mean': scaler.mean_.tolist(),
+        'scale': scaler.scale_.tolist(),
+        'n_features_in_': scaler.n_features_in_,
+        'feature_names': feature_names
+    }
+    print(f'[多进程训练] 归一化完成，特征数: {scaler.n_features_in_}, 特征: {len(feature_names)}')
 
     mode = params.get('mode', 'classification')
     use_ensemble = params.get('use_ensemble', False)
@@ -150,10 +186,17 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     lower_q = params.get('lower_q', 0.2)
     upper_q = params.get('upper_q', 0.8)
 
+    label_short = {
+        'fixed': 'fix',
+        'volatility': 'vol',
+        'multi': 'mul',
+        'regression': 'reg'
+    }.get(label_type, label_type[:3] if label_type else 'fix')
+
     if task_id and training_tasks:
         training_tasks[task_id] = {
             'progress': 65,
-            'status': '训练模型...',
+            'status': 'running',
             'message': f'总样本数: {total_samples}，来自 {len(stock_sample_counts)} 只股票'
         }
 
@@ -170,11 +213,11 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
         model_id = str(uuid.uuid4())[:8]
         parent_id = str(uuid.uuid4())
         stock_display = f'{len(stock_sample_counts)}只股票'
-        base_name = model_name or f'{params["market"]}_{params["period"]}_ENS_{len(features)}f_{params["horizon"]}h_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks'
+        base_name = model_name or f'{params["market"]}_{params["period"]}_ENS_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{label_short}_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks'
         trained_models = []
         for i, model_key in enumerate(result['models'].keys()):
             if task_id and training_tasks:
-                training_tasks[task_id] = {'progress': 85 + i*5, 'status': '保存模型...',
+                training_tasks[task_id] = {'progress': 85 + i*5, 'status': 'running',
                     'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
             print(f'[多进程训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
             model_obj = result['models'][model_key]
@@ -190,7 +233,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
                 features=features,
                 file_path=sub_filepath,
                 metrics=sub_metric,
-                scaler_params=None,
+                scaler_params=scaler_params,
                 label_type=label_type,
                 horizon=horizon,
                 threshold=threshold,
@@ -204,8 +247,10 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
             trained_models.append(sub_model_info)
 
         if task_id and training_tasks:
-            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+            training_tasks[task_id] = {'progress': 100, 'status': 'running', 'message': '训练完成!'}
         print(f'[多进程训练] 任务ID: {task_id} - 集成训练完成, 保存了{len(trained_models)}个子模型')
+        
+        return {'model_id': parent_id, 'model_info': {'id': parent_id, 'type': 'ensemble', 'sub_models': trained_models}}
 
     else:
         print(f'[多进程训练] 任务ID: {task_id} - 单模型训练模式, 模型: {model_type}')
@@ -213,7 +258,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
         print(f'[多进程训练] 任务ID: {task_id} - 模型训练完成, 指标: {result["test_metrics"]}')
 
         if task_id and training_tasks:
-            training_tasks[task_id] = {'progress': 80, 'status': '保存模型...', 'message': '正在保存模型'}
+            training_tasks[task_id] = {'progress': 80, 'status': 'running', 'message': '正在保存模型'}
 
         import uuid
         model_id = str(uuid.uuid4())[:8]
@@ -223,7 +268,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
                 main_metric = result['test_metrics']['r2']
             else:
                 main_metric = result['test_metrics']['accuracy']
-            model_name = f'{params["market"]}_{params["period"]}_{model_type}_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks_{main_metric:.2f}'
+            model_name = f'{params["market"]}_{params["period"]}_{model_type}_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{label_short}_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks_{main_metric:.2f}'
             model_name = f'{model_name}_{model_id}'
 
         filename = f'{model_name}.pkl'
@@ -238,7 +283,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
             features=features,
             file_path=filepath,
             metrics=result['test_metrics'],
-            scaler_params=None,
+            scaler_params=scaler_params,
             label_type=label_type,
             horizon=horizon,
             threshold=threshold,
@@ -250,10 +295,12 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
         )
 
         if task_id and training_tasks:
-            training_tasks[task_id] = {'progress': 100, 'status': '完成', 'message': '训练完成!'}
+            training_tasks[task_id] = {'progress': 100, 'status': 'completed', 'message': '训练完成!'}
         print(f'[多进程训练] 任务ID: {task_id} - 单模型训练完成, 模型已保存: {filename}')
 
     print(f'[多进程训练] 任务ID: {task_id} - 全部完成，总耗时: {time.time() - start_time:.2f}秒')
+    
+    return {'model_id': model_info.get('id'), 'model_info': model_info}
 
 
 if __name__ == '__main__':

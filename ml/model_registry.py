@@ -121,12 +121,25 @@ class ModelRegistry:
             return model_info
         return None
 
+    def get_model_by_parent_id(self, parent_id: str):
+        """通过 parent_model_id 获取第一个模型信息"""
+        data = self._load_registry()
+        for m in data['models']:
+            if m.get('parent_model_id') == parent_id:
+                return m
+        return None
+
+    def get_models_by_parent_id(self, parent_id: str):
+        """通过 parent_model_id 获取所有子模型"""
+        data = self._load_registry()
+        return [m for m in data['models'] if m.get('parent_model_id') == parent_id]
+
     def delete_model(self, model_id):
         data = self._load_registry()
         model_to_delete = None
 
         for m in data['models']:
-            if m['id'] == model_id or m['model_name'] == model_id:
+            if m['id'] == model_id or m['model_name'] == model_id or m.get('parent_model_id') == model_id:
                 model_to_delete = m
                 break
 

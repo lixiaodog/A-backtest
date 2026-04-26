@@ -111,3 +111,7 @@ class LocalCacheProvider(BaseDataProvider):
             if os.path.exists(os.path.join(self.cache_dir, mkt)):
                 markets.append(mkt)
         return markets
+
+    def get_stock_info(self, stock_code: str) -> dict:
+        """获取股票信息"""
+        return {'code': stock_code, 'name': stock_code}

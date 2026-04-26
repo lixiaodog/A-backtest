@@ -5,6 +5,7 @@ def generate_model_name(
     end_date: str,
     feature_count: int,
     horizon: int,
+    label_type: str,
     threshold: float,
     vol_window: int,
     stock_count: int,
@@ -15,8 +16,8 @@ def generate_model_name(
 ) -> str:
     """统一生成标准化的模型名称
 
-    单模型格式: {market}_{period}_{model_type}_{end_date}_{features}f_{horizon}h_{threshold}t_{vol_window}v_{stocks}[_{metric}]
-    集成子模型格式: {market}_{period}_ENS_{end_date}_{features}f_{horizon}h_{threshold}t_{vol_window}v_{stocks}_{ensemble_id}_{model_type}_{ensemble_index}
+    单模型格式: {market}_{period}_{model_type}_{end_date}_{features}f_{horizon}h_{label_type}_{threshold}t_{vol_window}v_{stocks}[_{metric}]
+    集成子模型格式: {market}_{period}_ENS_{end_date}_{features}f_{horizon}h_{label_type}_{threshold}t_{vol_window}v_{stocks}_{ensemble_id}_{model_type}_{ensemble_index}
 
     Args:
         market: 市场，如 'SZ', 'SH'
@@ -25,6 +26,7 @@ def generate_model_name(
         end_date: 结束日期，格式 YYYYMMDD
         feature_count: 特征数量
         horizon: 预测天数
+        label_type: 标签类型，如 'fixed', 'volatility', 'multi', 'regression'
         threshold: 阈值
         vol_window: 波动窗口
         stock_count: 股票数量
@@ -36,13 +38,20 @@ def generate_model_name(
     Returns:
         标准化的模型名称
     """
-    base = f'{market.upper()}_{period.upper()}_{model_type}_{end_date}_{feature_count}f_{horizon}h_{threshold}t_{vol_window}v_{stock_count}'
+    label_short = {
+        'fixed': 'fix',
+        'volatility': 'vol',
+        'multi': 'mul',
+        'regression': 'reg'
+    }.get(label_type, label_type[:3])
+
+    base = f'{market.upper()}_{period.upper()}_{model_type}_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}'
 
     if metric is not None:
         base = f'{base}_{metric:.2f}'
 
     if is_ensemble and ensemble_id:
-        base = f'{market.upper()}_{period.upper()}_ENS_{end_date}_{feature_count}f_{horizon}h_{threshold}t_{vol_window}v_{stock_count}_{ensemble_id}_{model_type}_{ensemble_index}'
+        base = f'{market.upper()}_{period.upper()}_ENS_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}_{ensemble_id}_{model_type}_{ensemble_index}'
     elif ensemble_id:
         base = f'{base}_{ensemble_id}'
 
@@ -56,10 +65,18 @@ def parse_model_name(name: str) -> dict:
         dict with parsed fields or None if not standard format
     """
     parts = name.split('_')
-    if len(parts) < 9:
+    if len(parts) < 10:
         return None
 
     try:
+        label_short = parts[6]
+        label_type = {
+            'fix': 'fixed',
+            'vol': 'volatility',
+            'mul': 'multi',
+            'reg': 'regression'
+        }.get(label_short, label_short)
+
         result = {
             'market': parts[0],
             'period': parts[1],
@@ -67,22 +84,23 @@ def parse_model_name(name: str) -> dict:
             'end_date': parts[3],
             'feature_count': int(parts[4].replace('f', '')),
             'horizon': int(parts[5].replace('h', '')),
-            'threshold': float(parts[6].replace('t', '')),
-            'vol_window': int(parts[7].replace('v', '')),
-            'stock_count': int(parts[8]),
+            'label_type': label_type,
+            'threshold': float(parts[7].replace('t', '')),
+            'vol_window': int(parts[8].replace('v', '')),
+            'stock_count': int(parts[9]),
         }
 
         if result['model_type'] == 'ENS':
             result['is_ensemble'] = True
-            if len(parts) >= 11:
-                result['ensemble_id'] = parts[10]
-                if len(parts) >= 12:
-                    result['model_type'] = parts[11]
-                    if len(parts) >= 13:
-                        result['ensemble_index'] = int(parts[12])
-        elif len(parts) >= 10:
-            if parts[9].replace('.', '').isdigit():
-                result['metric'] = float(parts[9])
+            if len(parts) >= 12:
+                result['ensemble_id'] = parts[11]
+                if len(parts) >= 13:
+                    result['model_type'] = parts[12]
+                    if len(parts) >= 14:
+                        result['ensemble_index'] = int(parts[13])
+        elif len(parts) >= 11:
+            if parts[10].replace('.', '').isdigit():
+                result['metric'] = float(parts[10])
 
         return result
     except (ValueError, IndexError):
