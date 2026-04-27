@@ -28,10 +28,11 @@ class PredictionResult:
     raw_prediction: Dict = field(default_factory=dict)
     rank: int = 0
     error: str = ""
+    mode: str = "classification"
 
 
 def _predict_single_stock_process(args) -> Optional[PredictionResult]:
-    stock_code, model_info, period, market, data_source_config = args
+    stock_code, model_info, period, market, data_source_config, predict_date = args
     
     try:
         import joblib
@@ -68,10 +69,28 @@ def _predict_single_stock_process(args) -> Optional[PredictionResult]:
         else:
             data_provider = LocalDataProvider(silent=False)
         
-        realtime_data = data_provider.get_stock_data(stock_code, period=period, market=market, latest_only=True)
+        if predict_date:
+            realtime_data = data_provider.get_stock_data(
+                stock_code, period=period, market=market, 
+                end_date=predict_date, latest_only=True
+            )
+        else:
+            realtime_data = data_provider.get_stock_data(
+                stock_code, period=period, market=market, latest_only=True
+            )
         
         if realtime_data is None or realtime_data.empty:
             return None
+        
+        if predict_date and len(realtime_data) > 0:
+            last_date = realtime_data.index[-1] if hasattr(realtime_data, 'index') and isinstance(realtime_data.index, pd.DatetimeIndex) else None
+            if last_date is None and 'date' in realtime_data.columns:
+                last_date = pd.to_datetime(realtime_data['date'].iloc[-1])
+            
+            if last_date is not None:
+                predict_dt = pd.to_datetime(predict_date)
+                if last_date.date() != predict_dt.date():
+                    return None
         
         stock_name = stock_code
         if "name" in realtime_data.columns and len(realtime_data) > 0:
@@ -151,7 +170,8 @@ def _predict_single_stock_process(args) -> Optional[PredictionResult]:
             sell_probability=prediction.get("probabilities", {}).get("卖出", 0.0),
             hold_probability=prediction.get("probabilities", {}).get("持有", 0.0),
             predicted_return=prediction.get("predicted_return", 0.0),
-            raw_prediction=prediction
+            raw_prediction=prediction,
+            mode=model_info.get("mode", "classification")
         )
     except Exception as e:
         print(f"[Process] {stock_code} 预测异常: {e}")
@@ -171,6 +191,8 @@ class PredictionTask:
     top_n: int = 100
     fusion_mode: str = "intersection"
     period: str = "1d"
+    predict_date: str = ""
+    mode: str = "classification"  # 新增: classification 或 regression
     status: str = "pending"
     progress: int = 0
     message: str = ""
@@ -199,7 +221,8 @@ class AdvancedPredictor:
     def create_task(self, task_id: str, markets: List[str], stocks: List[str],
                     model_ids: List[str], sort_by: str = "confidence",
                     sort_order: str = "desc", top_n: int = 100,
-                    fusion_mode: str = "intersection", period: str = "1d") -> PredictionTask:
+                    fusion_mode: str = "intersection", period: str = "1d",
+                    predict_date: str = "", mode: str = "classification") -> PredictionTask:
         import time
         task = PredictionTask(
             task_id=task_id,
@@ -211,6 +234,8 @@ class AdvancedPredictor:
             top_n=top_n,
             fusion_mode=fusion_mode,
             period=period,
+            predict_date=predict_date,
+            mode=mode,
             status="pending",
             progress=0,
             start_time=time.time()
@@ -468,14 +493,24 @@ class AdvancedPredictor:
             nonlocal success_count, fail_count
             try:
                 market = self._infer_market(stock)
-                # 获取最新一天的因子数据
-                realtime_data = self.data_provider.get_stock_data(
-                    stock, 
-                    period=task.period, 
-                    market=market,
-                    include_raw_data=False,
-                    latest_only=True
-                )
+                # 获取指定日期或最新一天的因子数据
+                if task.predict_date:
+                    realtime_data = self.data_provider.get_stock_data(
+                        stock, 
+                        period=task.period, 
+                        market=market,
+                        include_raw_data=False,
+                        end_date=task.predict_date,
+                        latest_only=True
+                    )
+                else:
+                    realtime_data = self.data_provider.get_stock_data(
+                        stock, 
+                        period=task.period, 
+                        market=market,
+                        include_raw_data=False,
+                        latest_only=True
+                    )
                 
                 if realtime_data is None or realtime_data.empty:
                     with processed_lock:
@@ -484,6 +519,21 @@ class AdvancedPredictor:
                     if fail_count <= 3:
                         print(f"[Thread] {stock}: 无数据 (market={market})", flush=True)
                     return None
+                
+                if task.predict_date and len(realtime_data) > 0:
+                    last_date = realtime_data.index[-1] if hasattr(realtime_data, 'index') and isinstance(realtime_data.index, pd.DatetimeIndex) else None
+                    if last_date is None and 'date' in realtime_data.columns:
+                        last_date = pd.to_datetime(realtime_data['date'].iloc[-1])
+                    
+                    if last_date is not None:
+                        predict_dt = pd.to_datetime(task.predict_date)
+                        if last_date.date() != predict_dt.date():
+                            with processed_lock:
+                                fail_count += 1
+                                processed_count[0] += 1
+                            if fail_count <= 3:
+                                print(f"[Thread] {stock}: 预测日期 {task.predict_date} 无数据 (最后日期: {last_date.date()})", flush=True)
+                            return None
                 
                 available_features = [f for f in model_features if f in realtime_data.columns]
                 if not available_features:
@@ -502,6 +552,19 @@ class AdvancedPredictor:
                 
                 if features.isnull().any().any():
                     features = features.fillna(0)
+                
+                if scaler_params:
+                    mean = np.array(scaler_params['mean'])
+                    scale = np.array(scaler_params['scale'])
+                    feature_order = scaler_params.get('feature_names', model_features)
+                    
+                    available_in_order = [f for f in feature_order if f in features.columns]
+                    if available_in_order:
+                        features_ordered = features[available_in_order].values
+                        scale_subset = np.array([scale[feature_order.index(f)] for f in available_in_order])
+                        mean_subset = np.array([mean[feature_order.index(f)] for f in available_in_order])
+                        features_normalized = (features_ordered - mean_subset) / scale_subset
+                        features = pd.DataFrame(features_normalized, columns=available_in_order)
                 
                 if mode == "regression":
                     prediction = predictor._predict_regression(features, threshold)
@@ -528,7 +591,8 @@ class AdvancedPredictor:
                         sell_probability=prediction.get("probabilities", {}).get("卖出") or 0.0,
                         hold_probability=prediction.get("probabilities", {}).get("持有") or 0.0,
                         predicted_return=prediction.get("predicted_return") or 0.0,
-                        raw_prediction=prediction
+                        raw_prediction=prediction,
+                        mode=model_info.get("mode", "classification")
                     )
                 else:
                     with processed_lock:
@@ -619,7 +683,7 @@ class AdvancedPredictor:
                     data_source_config = {'type': 'akshare'}
             
             predict_args.append((
-                stock, model_info, task.period, market, data_source_config
+                stock, model_info, task.period, market, data_source_config, task.predict_date
             ))
         
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -751,7 +815,8 @@ class AdvancedPredictor:
                 sell_probability=prediction.get("probabilities", {}).get("卖出", 0.0),
                 hold_probability=prediction.get("probabilities", {}).get("持有", 0.0),
                 predicted_return=prediction.get("predicted_return", 0.0),
-                raw_prediction=prediction
+                raw_prediction=prediction,
+                mode=model_info.get("mode", "classification")
             )
 
         except Exception as e:
@@ -763,11 +828,11 @@ class AdvancedPredictor:
     def _sort_results(self, task: PredictionTask):
         for model_id in task.results:
             task.results[model_id] = self._sort_single_result(
-                task.results[model_id], task.sort_by, task.sort_order
+                task.results[model_id], task.sort_by, task.sort_order, task.mode
             )
 
     def _sort_single_result(self, results: List[PredictionResult],
-                           sort_by: str, sort_order: str) -> List[PredictionResult]:
+                           sort_by: str, sort_order: str, mode: str = "classification") -> List[PredictionResult]:
         reverse = sort_order == "desc"
 
         def signal_weight(signal: str) -> int:
@@ -779,10 +844,17 @@ class AdvancedPredictor:
                 return 0
 
         if sort_by == "confidence":
-            if reverse:
-                sorted_results = sorted(results, key=lambda x: (signal_weight(x.signal), x.confidence or 0), reverse=True)
+            # 分类模式按信号权重排序，回归模式按预测收益率排序
+            if mode == "regression":
+                if reverse:
+                    sorted_results = sorted(results, key=lambda x: x.predicted_return or 0, reverse=True)
+                else:
+                    sorted_results = sorted(results, key=lambda x: x.predicted_return or 0)
             else:
-                sorted_results = sorted(results, key=lambda x: (signal_weight(x.signal), x.confidence or 0))
+                if reverse:
+                    sorted_results = sorted(results, key=lambda x: (signal_weight(x.signal), x.confidence or 0), reverse=True)
+                else:
+                    sorted_results = sorted(results, key=lambda x: (signal_weight(x.signal), x.confidence or 0))
         elif sort_by == "buy_probability":
             sorted_results = sorted(results, key=lambda x: x.buy_probability or 0, reverse=reverse)
         elif sort_by == "return":
@@ -841,12 +913,14 @@ class AdvancedPredictor:
         for stock_code in common_stocks:
             total_confidence = 0
             total_buy_prob = 0
+            total_predicted_return = 0
             signals = []
 
             for model_id, model_results in results_by_model.items():
                 result = model_results[stock_code]
                 total_confidence += result.confidence
                 total_buy_prob += result.buy_probability
+                total_predicted_return += result.predicted_return or 0
                 signals.append(result.signal)
 
             buy_count = signals.count("买入") + signals.count("强烈买入") + signals.count("轻度买入")
@@ -861,6 +935,10 @@ class AdvancedPredictor:
 
             avg_confidence = total_confidence / len(results_by_model)
             avg_buy_prob = total_buy_prob / len(results_by_model)
+            avg_predicted_return = total_predicted_return / len(results_by_model)
+
+            first_result = list(results_by_model.values())[0][stock_code]
+            mode = first_result.mode
 
             fused.append(PredictionResult(
                 stock_code=stock_code,
@@ -871,7 +949,9 @@ class AdvancedPredictor:
                 signal=final_signal,
                 confidence=avg_confidence,
                 buy_probability=avg_buy_prob,
-                raw_prediction={"models": len(results_by_model)}
+                predicted_return=avg_predicted_return,
+                raw_prediction={"models": len(results_by_model)},
+                mode=mode
             ))
 
         return fused
@@ -915,12 +995,14 @@ class AdvancedPredictor:
                     stock_votes[stock_code] = {
                         "results": [],
                         "buy_votes": 0,
-                        "total_confidence": 0
+                        "total_confidence": 0,
+                        "total_predicted_return": 0
                     }
                 stock_votes[stock_code]["results"].append(result)
                 if "买入" in result.signal:
                     stock_votes[stock_code]["buy_votes"] += 1
                 stock_votes[stock_code]["total_confidence"] += result.confidence
+                stock_votes[stock_code]["total_predicted_return"] += result.predicted_return or 0
 
         sorted_stocks = sorted(
             stock_votes.items(),
@@ -932,6 +1014,7 @@ class AdvancedPredictor:
         for stock_code, vote_info in sorted_stocks:
             avg_confidence = vote_info["total_confidence"] / len(vote_info["results"])
             buy_ratio = vote_info["buy_votes"] / len(vote_info["results"])
+            avg_predicted_return = vote_info["total_predicted_return"] / len(vote_info["results"])
 
             if buy_ratio >= 0.5:
                 signal = "买入"
@@ -941,6 +1024,7 @@ class AdvancedPredictor:
                 signal = "持有"
 
             first_result = vote_info["results"][0]
+            mode = first_result.mode
             fused.append(PredictionResult(
                 stock_code=stock_code,
                 stock_name=first_result.stock_name,
@@ -950,10 +1034,12 @@ class AdvancedPredictor:
                 signal=signal,
                 confidence=avg_confidence,
                 buy_probability=buy_ratio,
+                predicted_return=avg_predicted_return,
                 raw_prediction={
                     "buy_votes": vote_info["buy_votes"],
                     "total_models": len(vote_info["results"])
-                }
+                },
+                mode=mode
             ))
 
         return fused
@@ -975,21 +1061,31 @@ class AdvancedPredictor:
                 
                 model_name = results[0].model_name if results else model_id
                 
+                first_result = results[0]
+                is_regression = first_result.mode == "regression"
+                
                 data = []
                 for r in results:
-                    row = {
-                        '排名': r.rank,
-                        '股票代码': r.stock_code,
-                        '股票名称': r.stock_name,
-                        '模型名称': r.model_name or model_name,
-                        '模型类型': r.model_type,
-                        '买入概率': r.buy_probability,
-                        '持有概率': r.hold_probability,
-                        '卖出概率': r.sell_probability,
-                        '预测收益率': r.predicted_return,
-                        '信号': r.signal,
-                        '置信度': r.confidence,
-                    }
+                    if is_regression:
+                        row = {
+                            '排名': r.rank,
+                            '股票代码': r.stock_code,
+                            '股票名称': r.stock_name,
+                            '模型名称': r.model_name or model_name,
+                            '预测收益率': r.predicted_return,
+                        }
+                    else:
+                        row = {
+                            '排名': r.rank,
+                            '股票代码': r.stock_code,
+                            '股票名称': r.stock_name,
+                            '模型名称': r.model_name or model_name,
+                            '买入概率': r.buy_probability,
+                            '持有概率': r.hold_probability,
+                            '卖出概率': r.sell_probability,
+                            '信号': r.signal,
+                            '置信度': r.confidence,
+                        }
                     if r.raw_prediction:
                         for k, v in r.raw_prediction.items():
                             if k not in ('signal', 'confidence', 'probabilities', 'predicted_return'):
@@ -998,7 +1094,8 @@ class AdvancedPredictor:
                 
                 df = pd.DataFrame(data)
                 
-                filename = f"predict_{task.task_id}_{model_id[:8]}_{timestamp}.xlsx"
+                mode_suffix = 'regression' if is_regression else 'classification'
+                filename = f"predict_{task.task_id}_{model_id[:8]}_{mode_suffix}_{timestamp}.xlsx"
                 filepath = os.path.join(export_dir, filename)
                 
                 df.to_excel(filepath, index=False, sheet_name='预测结果')
@@ -1006,21 +1103,29 @@ class AdvancedPredictor:
                 task.export_files[model_id] = filepath
             
             if task.fused_results:
+                first_fused = task.fused_results[0]
+                is_regression = first_fused.mode == "regression"
+                
                 data = []
                 for r in task.fused_results:
-                    row = {
-                        '排名': r.rank,
-                        '股票代码': r.stock_code,
-                        '股票名称': r.stock_name,
-                        '模型名称': r.model_name,
-                        '模型类型': r.model_type,
-                        '买入概率': r.buy_probability,
-                        '持有概率': r.hold_probability,
-                        '卖出概率': r.sell_probability,
-                        '预测收益率': r.predicted_return,
-                        '信号': r.signal,
-                        '置信度': r.confidence,
-                    }
+                    if is_regression:
+                        row = {
+                            '排名': r.rank,
+                            '股票代码': r.stock_code,
+                            '股票名称': r.stock_name,
+                            '预测收益率': r.predicted_return,
+                        }
+                    else:
+                        row = {
+                            '排名': r.rank,
+                            '股票代码': r.stock_code,
+                            '股票名称': r.stock_name,
+                            '买入概率': r.buy_probability,
+                            '持有概率': r.hold_probability,
+                            '卖出概率': r.sell_probability,
+                            '信号': r.signal,
+                            '置信度': r.confidence,
+                        }
                     if r.raw_prediction:
                         for k, v in r.raw_prediction.items():
                             if k not in ('signal', 'confidence', 'probabilities', 'predicted_return'):
@@ -1028,7 +1133,8 @@ class AdvancedPredictor:
                     data.append(row)
                 
                 df = pd.DataFrame(data)
-                filename = f"predict_{task.task_id}_fused_{timestamp}.xlsx"
+                mode_suffix = 'regression' if is_regression else 'classification'
+                filename = f"predict_{task.task_id}_fused_{mode_suffix}_{timestamp}.xlsx"
                 filepath = os.path.join(export_dir, filename)
                 df.to_excel(filepath, index=False, sheet_name='融合结果')
                 

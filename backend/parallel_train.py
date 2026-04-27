@@ -119,11 +119,13 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     all_y = []
     stock_sample_counts = {}
 
-    for result in results:
-        if result:
-            stock_sample_counts[result['stock_code']] = result['sample_count']
-            all_X.append(result['X'])
-            all_y.append(result['y'])
+    # 按股票代码排序，确保数据顺序一致（多进程返回顺序不确定）
+    sorted_results = sorted([r for r in results if r], key=lambda x: x.get('stock_code', ''))
+    
+    for result in sorted_results:
+        stock_sample_counts[result['stock_code']] = result['sample_count']
+        all_X.append(result['X'])
+        all_y.append(result['y'])
 
     if not all_X:
         if task_id and training_tasks:
@@ -149,28 +151,34 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     print(f'[多进程训练] 数据合并完成，总样本: {total_samples}，总耗时: {total_time:.2f}秒')
     print(f'[多进程训练] 股票样本分布: {stock_sample_counts}')
 
-    if task_id and training_tasks:
-        training_tasks[task_id] = {
-            'progress': 58,
-            'status': 'running',
-            'message': f'对 {X.shape[1]} 个特征进行归一化'
-        }
+    normalize = params.get('normalize', False)
+    
+    if normalize:
+        if task_id and training_tasks:
+            training_tasks[task_id] = {
+                'progress': 58,
+                'status': 'running',
+                'message': f'对 {X.shape[1]} 个特征进行归一化'
+            }
 
-    from sklearn.preprocessing import StandardScaler
-    import numpy as np
-    
-    feature_names = list(X.columns)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X = pd.DataFrame(X_scaled, columns=feature_names)
-    
-    scaler_params = {
-        'mean': scaler.mean_.tolist(),
-        'scale': scaler.scale_.tolist(),
-        'n_features_in_': scaler.n_features_in_,
-        'feature_names': feature_names
-    }
-    print(f'[多进程训练] 归一化完成，特征数: {scaler.n_features_in_}, 特征: {len(feature_names)}')
+        from sklearn.preprocessing import StandardScaler
+        import numpy as np
+        
+        feature_names = list(X.columns)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        X = pd.DataFrame(X_scaled, columns=feature_names)
+        
+        scaler_params = {
+            'mean': scaler.mean_.tolist(),
+            'scale': scaler.scale_.tolist(),
+            'n_features_in_': scaler.n_features_in_,
+            'feature_names': feature_names
+        }
+        print(f'[多进程训练] 归一化完成，特征数: {scaler.n_features_in_}, 特征: {len(feature_names)}')
+    else:
+        print(f'[多进程训练] 跳过特征归一化')
+        scaler_params = None
 
     mode = params.get('mode', 'classification')
     use_ensemble = params.get('use_ensemble', False)

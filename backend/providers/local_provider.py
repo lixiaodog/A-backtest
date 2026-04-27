@@ -195,22 +195,21 @@ class LocalDataProvider(DataProvider):
         period = kwargs.get('period', '1d')
         data_path = self._get_market_path(market, period)
         
-        # 构建文件路径
-        filename = f"{stock_code}.csv"
+        code_only = stock_code.split('.')[0] if '.' in stock_code else stock_code
+        
+        filename = f"{code_only}.csv"
         filepath = os.path.join(data_path, filename)
         
-        # 如果没找到，尝试在其他可能的位置搜索
         if not os.path.exists(filepath):
-            # 尝试从扫描结果中查找
-            filepath = self._stock_file_map.get(stock_code)
+            filepath = self._stock_file_map.get(code_only) or self._stock_file_map.get(stock_code)
             if not filepath:
-                # 重新扫描特定路径
                 self._scan_specific_directory(data_path)
-                # 在所有扫描结果中查找
-                for code, path in self._stock_file_map.items():
-                    if code == stock_code:
-                        filepath = path
-                        break
+                filepath = self._stock_file_map.get(code_only) or self._stock_file_map.get(stock_code)
+                if not filepath:
+                    for code, path in self._stock_file_map.items():
+                        if code == code_only or code == stock_code:
+                            filepath = path
+                            break
         
         if not filepath or not os.path.exists(filepath):
             print(f"[LocalDataProvider] 未找到股票 {stock_code} 的数据文件 (market={market}, period={period})")

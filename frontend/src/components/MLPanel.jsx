@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, Input, Switch, List, Divider, Modal, Descriptions, Alert, Statistic, Row, Col, Tooltip } from 'antd'
+import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, Input, Switch, List, Divider, Modal, Descriptions, Alert, Statistic, Row, Col, Tooltip, TreeSelect, Slider } from 'antd'
 import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, StopOutlined, PlusOutlined, ClearOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, PauseCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import dayjs from 'dayjs'
@@ -38,6 +38,16 @@ function MLPanel() {
   const [advancedPredictStatus, setAdvancedPredictStatus] = useState('')
   const [advancedPredictTasks, setAdvancedPredictTasks] = useState([])
   const [activeTab, setActiveTab] = useState('1')
+
+  // 评估状态
+  const [evaluateSectors, setEvaluateSectors] = useState([])
+  const [evaluateTaskId, setEvaluateTaskId] = useState(null)
+  const [evaluateProgress, setEvaluateProgress] = useState(0)
+  const [evaluateResults, setEvaluateResults] = useState(null)
+  const [evaluateTasks, setEvaluateTasks] = useState([])
+  const [evaluateModelId, setEvaluateModelId] = useState(null)
+  const [evaluateHorizon, setEvaluateHorizon] = useState(null)
+  const [evaluateLoading, setEvaluateLoading] = useState(false)
 
   const [form] = Form.useForm()
   const useEnsemble = Form.useWatch('useEnsemble', form)
@@ -171,6 +181,10 @@ function MLPanel() {
     } else if (key === 'advanced') {
       loadModels()
       fetchAdvancedPredictTasks()
+    } else if (key === 'evaluate') {
+      loadModels()
+      loadEvaluateSectors()
+      fetchEvaluateTasks()
     }
   }
 
@@ -255,7 +269,8 @@ function MLPanel() {
       train_mode: values.trainMode || 'thread',
       data_source: values.dataSource || 'cache',
       fast_mode: values.fastMode || false,
-      use_gpu: values.useGpu || false
+      use_gpu: values.useGpu || false,
+      normalize: values.normalize || false
     }
 
     setPendingQueue(prev => [...prev, newTask])
@@ -455,7 +470,8 @@ function MLPanel() {
         sort_order: values.sort_order || 'desc',
         top_n: values.top_n || 100,
         fusion_mode: values.fusion_mode || 'intersection',
-        period: values.period || '1d'
+        period: values.period || '1d',
+        predict_date: values.predict_date ? dayjs(values.predict_date).format('YYYY-MM-DD') : ''
       }
 
       const res = await axios.post('http://localhost:5000/api/ml/predict/advanced', requestData)
@@ -560,6 +576,193 @@ function MLPanel() {
       message.error('删除失败')
     }
   }
+
+  // 加载板块树形数据
+  const loadEvaluateSectors = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/ml/sectors')
+      setEvaluateSectors(res.data || [])
+    } catch (err) {
+      console.error('加载板块数据失败:', err)
+    }
+  }
+
+  // 获取评估任务列表
+  const fetchEvaluateTasks = useCallback(async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/ml/evaluate/tasks')
+      setEvaluateTasks(response.data.tasks || [])
+    } catch (error) {
+      console.error('获取评估任务列表失败:', error)
+    }
+  }, [])
+
+  // 提交评估任务
+  const handleEvaluate = async (values) => {
+    if (!values.model_id) {
+      message.error('请选择模型')
+      return
+    }
+    if (!values.sectors || values.sectors.length === 0) {
+      message.error('请选择至少一个板块')
+      return
+    }
+    if (!values.start_date || !values.end_date) {
+      message.error('请选择日期范围')
+      return
+    }
+
+    setEvaluateLoading(true)
+    setEvaluateProgress(0)
+    setEvaluateResults(null)
+
+    try {
+      const res = await axios.post('http://localhost:5000/api/ml/evaluate', {
+        model_id: values.model_id,
+        sectors: values.sectors,
+        start_date: dayjs(values.start_date).format('YYYYMMDD'),
+        end_date: dayjs(values.end_date).format('YYYYMMDD'),
+        validation_ratio: (values.validation_ratio || 20) / 100
+      })
+
+      const taskId = res.data.task_id
+      setEvaluateTaskId(taskId)
+      message.success('评估任务已启动')
+
+      const pollProgress = setInterval(async () => {
+        try {
+          const progressRes = await axios.get(`http://localhost:5000/api/ml/evaluate/${taskId}`)
+          const data = progressRes.data
+
+          setEvaluateProgress(data.progress || 0)
+
+          if (data.status === 'completed') {
+            clearInterval(pollProgress)
+            setEvaluateResults(data)
+            setEvaluateLoading(false)
+            message.success('评估完成')
+            fetchEvaluateTasks()
+          } else if (data.status === 'failed') {
+            clearInterval(pollProgress)
+            setEvaluateLoading(false)
+            message.error('评估失败: ' + data.message)
+            fetchEvaluateTasks()
+          }
+        } catch (e) {
+          clearInterval(pollProgress)
+          setEvaluateLoading(false)
+        }
+      }, 3000)
+    } catch (err) {
+      message.error('启动评估失败: ' + (err.response?.data?.error || err.message || '未知错误'))
+      setEvaluateLoading(false)
+    }
+  }
+
+  // 查看评估结果
+  const handleViewEvaluateResult = async (taskId) => {
+    try {
+      const res = await axios.get(`http://localhost:5000/api/ml/evaluate/${taskId}`)
+      const data = res.data
+      if (data.status === 'completed') {
+        setEvaluateResults(data)
+        message.success('已加载评估结果')
+      } else {
+        message.info(`任务状态: ${data.status}，进度: ${data.progress}%`)
+      }
+    } catch (err) {
+      message.error('获取结果失败: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
+  // 模型选择变化时自动填充预测天数
+  const handleEvaluateModelChange = (modelId) => {
+    setEvaluateModelId(modelId)
+    let horizon = null
+    for (const m of (Array.isArray(models) ? models : [])) {
+      if (m.id === modelId || m.model_name === modelId) {
+        horizon = m.horizon
+        break
+      }
+    }
+    if (!horizon) {
+      for (const [, group] of Object.entries(ensembleGroups)) {
+        for (const m of group) {
+          if (m.id === modelId) {
+            horizon = m.horizon
+            break
+          }
+        }
+        if (horizon) break
+      }
+    }
+    setEvaluateHorizon(horizon)
+  }
+
+  // 渲染评估指标
+  const renderEvaluateMetrics = (metrics, title) => {
+    if (!metrics || metrics.error) {
+      return <Alert type="warning" message={metrics?.error || metrics?.message || '无数据'} style={{ marginBottom: 8 }} />
+    }
+    if (metrics.message) {
+      return <Alert type="info" message={metrics.message} style={{ marginBottom: 8 }} />
+    }
+
+    const isRegression = metrics.mse !== undefined
+
+    if (isRegression) {
+      return (
+        <Card size="small" title={title} style={{ marginBottom: 8 }}>
+          <Row gutter={16}>
+            <Col span={8}><Statistic title="MSE" value={metrics.mse} precision={6} /></Col>
+            <Col span={8}><Statistic title="RMSE" value={metrics.rmse} precision={6} /></Col>
+            <Col span={8}><Statistic title="MAE" value={metrics.mae} precision={6} /></Col>
+          </Row>
+          <Row gutter={16} style={{ marginTop: 8 }}>
+            <Col span={8}><Statistic title="R²" value={metrics.r2} precision={4} /></Col>
+            <Col span={8}><Statistic title="方向准确率" value={(metrics.direction_accuracy * 100).toFixed(2)} suffix="%" /></Col>
+            <Col span={8}><Statistic title="样本数" value={metrics.total_samples} /></Col>
+          </Row>
+        </Card>
+      )
+    }
+
+    return (
+      <Card size="small" title={title} style={{ marginBottom: 8 }}>
+        <Row gutter={16}>
+          <Col span={6}><Statistic title="准确率" value={(metrics.accuracy * 100).toFixed(2)} suffix="%" /></Col>
+          <Col span={6}><Statistic title="精确率" value={(metrics.precision * 100).toFixed(2)} suffix="%" /></Col>
+          <Col span={6}><Statistic title="召回率" value={(metrics.recall * 100).toFixed(2)} suffix="%" /></Col>
+          <Col span={6}><Statistic title="F1" value={(metrics.f1 * 100).toFixed(2)} suffix="%" /></Col>
+        </Row>
+        <Row gutter={16} style={{ marginTop: 8 }}>
+          <Col span={12}><Statistic title="样本数" value={metrics.total_samples} /></Col>
+        </Row>
+        {metrics.per_class && (
+          <Table
+            size="small"
+            style={{ marginTop: 8 }}
+            dataSource={Object.entries(metrics.per_class).map(([name, data]) => ({ key: name, name, ...data }))}
+            pagination={false}
+            columns={[
+              { title: '类别', dataIndex: 'name', width: 100 },
+              { title: '精确率', dataIndex: 'precision', render: v => `${(v * 100).toFixed(2)}%` },
+              { title: '召回率', dataIndex: 'recall', render: v => `${(v * 100).toFixed(2)}%` },
+              { title: 'F1', dataIndex: 'f1', render: v => `${(v * 100).toFixed(2)}%` },
+              { title: '样本数', dataIndex: 'support', width: 80 }
+            ]}
+          />
+        )}
+      </Card>
+    )
+  }
+
+  // 定时刷新评估任务列表
+  useEffect(() => {
+    fetchEvaluateTasks()
+    const interval = setInterval(fetchEvaluateTasks, 5000)
+    return () => clearInterval(interval)
+  }, [fetchEvaluateTasks])
 
   const getSignalColor = (signal) => {
     if (signal === '买入' || signal === '轻度买入' || signal === '强烈买入') return 'green'
@@ -717,10 +920,10 @@ function MLPanel() {
             dataSource={fused_results || []}
             rowKey="stock_code"
             pagination={{ pageSize: 10, size: 'small' }}
-            scroll={{ y: 300 }}
+            scroll={{ y: 750 }}
             columns={(() => {
               const first = (fused_results || [])[0] || {}
-              const isRegression = first.predicted_return !== undefined && first.predicted_return !== 0 && !first.buy_probability
+              const isRegression = first.mode === 'regression'
               const base = [
                 { title: '排名', dataIndex: 'rank', width: 60 },
                 { title: '股票', dataIndex: 'stock_code', width: 80 },
@@ -764,7 +967,7 @@ function MLPanel() {
           <Card size="small" title="各模型结果">
             {Object.entries(results).map(([modelId, modelResults]) => {
               const first = (modelResults || [])[0] || {}
-              const isRegression = first.predicted_return !== undefined && first.predicted_return !== 0 && !first.buy_probability
+              const isRegression = first.mode === 'regression'
               const baseCols = [
                 { title: '排名', dataIndex: 'rank', width: 60 },
                 { title: '股票', dataIndex: 'stock_code', width: 80 },
@@ -1166,7 +1369,7 @@ function MLPanel() {
               </Row>
 
               <Row gutter={16}>
-                <Col span={12}>
+                <Col span={8}>
                   <Form.Item name="trainMode" label="训练方式" initialValue="thread" style={{ marginBottom: 8 }}>
                     <Select>
                       <Option value="thread">多线程</Option>
@@ -1174,9 +1377,14 @@ function MLPanel() {
                     </Select>
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={8}>
                   <Form.Item name="endDate" label="结束日期" style={{ marginBottom: 8 }}>
                     <DatePicker placeholder="结束日期" format="YYYYMMDD" style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item name="normalize" label="特征归一化" initialValue={false} valuePropName="checked" style={{ marginBottom: 8 }}>
+                    <Switch />
                   </Form.Item>
                 </Col>
               </Row>
@@ -1565,6 +1773,10 @@ function MLPanel() {
                   </Select>
                 </Form.Item>
 
+                <Form.Item name="predict_date" label="预测日期" tooltip="留空则使用最新数据">
+                  <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" />
+                </Form.Item>
+
                 <Button
                   type="primary"
                   htmlType="submit"
@@ -1669,6 +1881,140 @@ function MLPanel() {
             />
           </div>
           </Card>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane tab={<span style={{ color: '#fff' }}>评估</span>} key="evaluate">
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Card title="评估配置" size="small">
+              <Form layout="vertical" onFinish={handleEvaluate}>
+                <Form.Item name="model_id" label="选择模型" rules={[{ required: true, message: '请选择模型' }]}>
+                  <Select
+                    placeholder="选择模型"
+                    onChange={handleEvaluateModelChange}
+                    showSearch
+                    optionFilterProp="children"
+                  >
+                    {Object.entries(ensembleGroups).map(([parentId, group]) => {
+                      const m = group[0]
+                      return (
+                        <Select.Option key={parentId} value={parentId}>
+                          {m.model_name} [{m.model_type}]
+                        </Select.Option>
+                      )
+                    })}
+                    {Array.isArray(models) && models.map(m => (
+                      <Select.Option key={m.id || m.model_name} value={m.id || m.model_name}>
+                        {m.model_name || m.id} [{m.model_type || ''}]
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+
+                <Form.Item label="预测天数">
+                  <Input value={evaluateHorizon || '-'} readOnly placeholder="选择模型后自动填充" />
+                </Form.Item>
+
+                <Form.Item name="sectors" label="选择板块" rules={[{ required: true, message: '请选择板块' }]}>
+                  <TreeSelect
+                    treeData={evaluateSectors}
+                    fieldNames={{ label: 'title', key: 'key', value: 'key', children: 'children' }}
+                    treeCheckable
+                    showCheckedStrategy={TreeSelect.SHOW_CHILD}
+                    placeholder="选择板块"
+                    style={{ width: '100%' }}
+                    maxTagCount={5}
+                    dropdownStyle={{ maxHeight: 400, overflow: 'auto' }}
+                    allowClear
+                    treeDefaultExpandAll={false}
+                    showSearch
+                    treeNodeFilterProp="title"
+                  />
+                </Form.Item>
+
+                <Row gutter={8}>
+                  <Col span={12}>
+                    <Form.Item name="start_date" label="开始日期" rules={[{ required: true, message: '请选择开始日期' }]}>
+                      <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="end_date" label="结束日期" rules={[{ required: true, message: '请选择结束日期' }]}>
+                      <DatePicker style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+
+                <Form.Item name="validation_ratio" label="验证集比例" initialValue={20}>
+                  <Slider
+                    min={5}
+                    max={50}
+                    step={5}
+                    marks={{ 5: '5%', 10: '10%', 20: '20%', 30: '30%', 50: '50%' }}
+                    tooltip={{ formatter: v => `${v}%` }}
+                  />
+                </Form.Item>
+
+                {evaluateLoading && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Progress percent={evaluateProgress} status="active" />
+                  </div>
+                )}
+
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  icon={<RobotOutlined />}
+                  loading={evaluateLoading}
+                  style={{ width: '100%' }}
+                >
+                  开始评估
+                </Button>
+              </Form>
+            </Card>
+
+            {evaluateResults && (
+              <Card title="评估结果" size="small">
+                <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
+                  <Descriptions.Item label="模型">{evaluateResults.model_name || evaluateResults.model_id}</Descriptions.Item>
+                  <Descriptions.Item label="模式">{evaluateResults.mode === 'regression' ? '回归' : '分类'}</Descriptions.Item>
+                  <Descriptions.Item label="耗时">{evaluateResults.elapsed_time}秒</Descriptions.Item>
+                  <Descriptions.Item label="测试集样本">{evaluateResults.details?.test_samples || 0}</Descriptions.Item>
+                  <Descriptions.Item label="验证集样本">{evaluateResults.details?.validation_samples || 0}</Descriptions.Item>
+                  <Descriptions.Item label="股票数">{evaluateResults.details?.processed_stocks || 0}</Descriptions.Item>
+                </Descriptions>
+                {renderEvaluateMetrics(evaluateResults.test_metrics, '测试集指标')}
+                {renderEvaluateMetrics(evaluateResults.validation_metrics, '验证集指标')}
+              </Card>
+            )}
+
+            <Card title="评估任务列表" size="small">
+              <Table
+                size="small"
+                dataSource={evaluateTasks}
+                rowKey="task_id"
+                pagination={false}
+                columns={[
+                  { title: '任务ID', dataIndex: 'task_id', width: 80 },
+                  { title: '模型', dataIndex: 'model_name', width: 120, ellipsis: true },
+                  { title: '模式', dataIndex: 'mode', width: 60, render: v => v === 'regression' ? '回归' : '分类' },
+                  { title: '状态', dataIndex: 'status', width: 80, render: v => {
+                    const colorMap = { 'pending': 'default', 'running': 'processing', 'completed': 'success', 'failed': 'error' }
+                    return <Tag color={colorMap[v] || 'default'}>{v}</Tag>
+                  }},
+                  { title: '进度', dataIndex: 'progress', width: 100, render: v => <Progress percent={v} size="small" /> },
+                  { title: '消息', dataIndex: 'message', ellipsis: true },
+                  { title: '耗时', dataIndex: 'elapsed_time', width: 70, render: v => v ? `${v}s` : '-' },
+                  { title: '操作', width: 80, render: (_, record) => (
+                    <Space size={4}>
+                      {record.status === 'completed' && (
+                        <Button size="small" type="primary" onClick={() => handleViewEvaluateResult(record.task_id)}>结果</Button>
+                      )}
+                    </Space>
+                  )}
+                ]}
+              />
+            </Card>
+          </Space>
         </Tabs.TabPane>
       </Tabs>
     </div>

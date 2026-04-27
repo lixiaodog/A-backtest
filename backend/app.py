@@ -295,7 +295,7 @@ def serve_chart(filename):
 def _run_training_task(task_id, stock_list, market, period, model_name, start_date, end_date,
                         model_type, features, horizon, threshold, label_type, vol_window,
                         lower_q, upper_q, mode, use_ensemble, total_stocks, prepare_func,
-                        task_index=0, total_tasks=1, data_source='csv', use_gpu=False, fast_mode=False):
+                        task_index=0, total_tasks=1, data_source='csv', use_gpu=False, fast_mode=False, normalize=False):
     """后台线程执行单个训练任务"""
     from ml import ModelTrainer, ModelRegistry
     from ml.model_naming import generate_model_name
@@ -345,7 +345,8 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
         progress_scale=0.55,
         data_source=data_source,
         use_gpu=use_gpu,
-        fast_mode=fast_mode
+        fast_mode=fast_mode,
+        normalize=normalize
     )
 
     # 检查任务是否被停止
@@ -664,7 +665,8 @@ def _run_single_training_task(task_id, task_data):
                     'data_source': data_source,
                     'use_gpu': use_gpu,
                     'fast_mode': fast_mode,
-                    'label_type': label_type
+                    'label_type': label_type,
+                    'normalize': task_data.get('normalize', False)
                 },
                 task_id=task_id,
                 training_tasks=training_tasks
@@ -692,7 +694,8 @@ def _run_single_training_task(task_id, task_data):
                 prepare_func=prepare_func,
                 data_source=data_source,
                 use_gpu=use_gpu,
-                fast_mode=fast_mode
+                fast_mode=fast_mode,
+                normalize=task_data.get('normalize', False)
             )
             return
         
@@ -1003,6 +1006,7 @@ def ml_train_batch():
                 'data_source': task.get('data_source', 'csv'),
                 'use_gpu': task.get('use_gpu', False),
                 'fast_mode': task.get('fast_mode', False),
+                'normalize': task.get('normalize', False),
                 'queue_position': len(task_queue) + i + 1
             }
             
@@ -1406,6 +1410,7 @@ def ml_predict_advanced():
         top_n = data.get('top_n', 100)
         fusion_mode = data.get('fusion_mode', 'intersection')
         period = data.get('period', '1d')
+        predict_date = data.get('predict_date', '')
         
         # 数据源配置
         data_source = data.get('data_source', 'akshare')
@@ -1440,6 +1445,18 @@ def ml_predict_advanced():
             provider = ProviderFactory.create_provider('akshare')
 
         from backend.advanced_predictor import AdvancedPredictor, register_task, get_task_predictor
+        from ml import ModelRegistry
+        
+        # 获取模型模式（从第一个模型推断）
+        model_mode = "classification"
+        try:
+            registry = ModelRegistry()
+            first_model = registry.get_model_by_id(model_ids[0])
+            if first_model:
+                model_mode = first_model.get('mode', 'classification')
+        except:
+            pass
+        
         predictor = AdvancedPredictor(max_workers=4, data_provider=provider)
         
         task = predictor.create_task(
@@ -1451,7 +1468,9 @@ def ml_predict_advanced():
             sort_order=sort_order,
             top_n=top_n,
             fusion_mode=fusion_mode,
-            period=period
+            period=period,
+            predict_date=predict_date,
+            mode=model_mode
         )
         
         register_task(task_id, predictor)
@@ -1533,7 +1552,8 @@ def ml_get_advanced_prediction(task_id):
                     'hold_probability': r.hold_probability,
                     'predicted_return': r.predicted_return,
                     'rank': r.rank,
-                    'error': r.error
+                    'error': r.error,
+                    'mode': r.mode
                 }
                 for r in results
             ]
@@ -1551,7 +1571,8 @@ def ml_get_advanced_prediction(task_id):
                 'sell_probability': r.sell_probability,
                 'hold_probability': r.hold_probability,
                 'predicted_return': r.predicted_return,
-                'rank': r.rank
+                'rank': r.rank,
+                'mode': r.mode
             }
             for r in task.fused_results
         ]
@@ -2501,6 +2522,193 @@ def factor_cache_stop_task(task_id):
 
 
 # ==================== 因子缓存管理 API 结束 ====================
+
+
+# ==================== 板块数据 API ====================
+
+@app.route('/api/ml/sectors', methods=['GET'])
+def ml_get_sectors():
+    try:
+        import xml.etree.ElementTree as ET
+        sector_base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'sector')
+        if not os.path.exists(sector_base):
+            return jsonify([])
+
+        result = []
+        for category_dir in sorted(os.listdir(sector_base)):
+            category_path = os.path.join(sector_base, category_dir)
+            if not os.path.isdir(category_path):
+                continue
+
+            config_path = os.path.join(category_path, 'sectorConfig.xml')
+            children = []
+
+            if os.path.exists(config_path):
+                try:
+                    tree = ET.parse(config_path)
+                    root = tree.getroot()
+                    for parent_item in root.findall('.//Item'):
+                        if parent_item.get('type') == '0':
+                            for child_item in parent_item.findall('Item'):
+                                if child_item.get('type') == '2' and child_item.get('visible', '1') == '1':
+                                    name = child_item.get('name', '')
+                                    sector_file = os.path.join(category_path, name)
+                                    if os.path.exists(sector_file):
+                                        children.append({
+                                            'title': name,
+                                            'key': f'{category_dir}/{name}',
+                                            'isLeaf': True
+                                        })
+                except Exception:
+                    for f in sorted(os.listdir(category_path)):
+                        fpath = os.path.join(category_path, f)
+                        if f != 'sectorConfig.xml' and os.path.isfile(fpath):
+                            children.append({
+                                'title': f,
+                                'key': f'{category_dir}/{f}',
+                                'isLeaf': True
+                            })
+            else:
+                for f in sorted(os.listdir(category_path)):
+                    fpath = os.path.join(category_path, f)
+                    if os.path.isfile(fpath):
+                        children.append({
+                            'title': f,
+                            'key': f'{category_dir}/{f}',
+                            'isLeaf': True
+                        })
+
+            if children:
+                result.append({
+                    'title': category_dir,
+                    'key': category_dir,
+                    'children': children
+                })
+
+        return jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/sectors/<path:sector_key>/stocks', methods=['GET'])
+def ml_get_sector_stocks(sector_key):
+    try:
+        sector_base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'sector')
+        sector_file = os.path.join(sector_base, sector_key)
+
+        if not os.path.exists(sector_file):
+            return jsonify({'error': '板块不存在', 'stocks': []}), 404
+
+        with open(sector_file, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+
+        stocks = list(set(s.strip() for s in content.split(',') if s.strip()))
+        stocks.sort()
+
+        return jsonify({'stocks': stocks, 'count': len(stocks)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 板块数据 API 结束 ====================
+
+
+# ==================== 模型评估 API ====================
+
+@app.route('/api/ml/evaluate', methods=['POST'])
+def ml_evaluate():
+    try:
+        data = request.json
+        model_id = data.get('model_id')
+        sectors = data.get('sectors', [])
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        validation_ratio = data.get('validation_ratio', 0.2)
+
+        if not model_id:
+            return jsonify({'error': '请选择模型'}), 400
+        if not sectors:
+            return jsonify({'error': '请选择至少一个板块'}), 400
+        if not start_date or not end_date:
+            return jsonify({'error': '请选择日期范围'}), 400
+
+        from backend.model_evaluator import ModelEvaluator, register_eval_task
+
+        evaluator = ModelEvaluator()
+
+        try:
+            task_id = evaluator.create_task(
+                model_id=model_id,
+                sectors=sectors,
+                start_date=start_date,
+                end_date=end_date,
+                validation_ratio=validation_ratio
+            )
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        register_eval_task(task_id, evaluator)
+
+        thread = threading.Thread(target=evaluator.run_evaluation, args=(task_id,))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'task_id': task_id,
+            'status': 'started',
+            'message': '评估任务已启动'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/evaluate/<task_id>', methods=['GET'])
+def ml_get_evaluation(task_id):
+    try:
+        from backend.model_evaluator import get_task_evaluator, get_all_evaluators
+
+        evaluator = get_task_evaluator(task_id)
+        if not evaluator:
+            for ev in get_all_evaluators():
+                task = ev.get_task(task_id)
+                if task:
+                    return jsonify(task)
+            return jsonify({'error': '任务不存在'}), 404
+
+        task = evaluator.get_task(task_id)
+        if not task:
+            return jsonify({'error': '任务不存在'}), 404
+
+        return jsonify(task)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/evaluate/tasks', methods=['GET'])
+def ml_get_evaluation_tasks():
+    try:
+        from backend.model_evaluator import get_all_evaluators
+
+        all_tasks = []
+        for evaluator in get_all_evaluators():
+            all_tasks.extend(evaluator.get_all_tasks())
+
+        all_tasks.sort(key=lambda x: x.get('start_time') or 0, reverse=True)
+
+        return jsonify({'tasks': all_tasks})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 模型评估 API 结束 ====================
 
 
 if __name__ == '__main__':

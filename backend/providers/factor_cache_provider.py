@@ -157,16 +157,35 @@ class FactorCacheProvider(DataProvider):
                        factor_library: str,
                        latest_only: bool = False) -> Optional[pd.DataFrame]:
         """从数据库查询因子数据"""
+        # 标准化日期格式：将 YYYYMMDD 转换为 YYYY-MM-DD
+        def normalize_date(date_str):
+            if date_str and len(date_str) == 8 and date_str.isdigit():
+                return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            return date_str
+        
+        start_date = normalize_date(start_date)
+        end_date = normalize_date(end_date)
+        
         try:
             with sqlite3.connect(db_path) as conn:
                 if latest_only:
-                    query = '''
-                        SELECT trade_date, factor_name, factor_value 
-                        FROM factor_data 
-                        WHERE factor_library = ?
-                        AND trade_date = (SELECT MAX(trade_date) FROM factor_data WHERE factor_library = ?)
-                    '''
-                    params = [factor_library, factor_library]
+                    # 如果指定了 end_date，严格匹配该日期
+                    if end_date:
+                        query = '''
+                            SELECT trade_date, factor_name, factor_value 
+                            FROM factor_data 
+                            WHERE factor_library = ?
+                            AND trade_date = ?
+                        '''
+                        params = [factor_library, end_date]
+                    else:
+                        query = '''
+                            SELECT trade_date, factor_name, factor_value 
+                            FROM factor_data 
+                            WHERE factor_library = ?
+                            AND trade_date = (SELECT MAX(trade_date) FROM factor_data WHERE factor_library = ?)
+                        '''
+                        params = [factor_library, factor_library]
                 else:
                     query = '''
                         SELECT trade_date, factor_name, factor_value 

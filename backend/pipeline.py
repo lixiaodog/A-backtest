@@ -15,7 +15,7 @@ class TrainingPipeline:
     def __init__(self, stock_list, task_id, prepare_func, features, horizon, threshold,
                  vol_window, lower_q, upper_q, start_date, end_date, period, market, mode,
                  training_tasks, progress_offset=0, progress_scale=0.6, num_feature_workers=3,
-                 data_source='csv', use_gpu=False, fast_mode=False):
+                 data_source='csv', use_gpu=False, fast_mode=False, normalize=False):
         self.stock_list = stock_list
         self.task_id = task_id
         self.prepare_func = prepare_func
@@ -37,6 +37,7 @@ class TrainingPipeline:
         self.data_source = data_source
         self.use_gpu = use_gpu
         self.fast_mode = fast_mode
+        self.normalize = normalize
 
         self.raw_queue = queue.Queue(maxsize=10)
         self.feature_queue = queue.Queue(maxsize=10)
@@ -47,6 +48,7 @@ class TrainingPipeline:
         self.error = None
         self.all_X = []
         self.all_y = []
+        self.all_stock_codes = []  # 记录股票代码顺序
         self.stock_sample_counts = {}
         self.count_lock = threading.Lock()
         self.workers_finished = 0
@@ -169,6 +171,7 @@ class TrainingPipeline:
                 stock_code, X, y = self.feature_queue.get(timeout=2)
                 self.all_X.append(X)
                 self.all_y.append(y)
+                self.all_stock_codes.append(stock_code)  # 记录股票代码
                 self.stock_sample_counts[stock_code] = len(X)
                 collected += 1
                 _log(f'[数据处理] {stock_code} 数据已收集，当前共 {len(self.all_X)} 只股票')
@@ -197,9 +200,14 @@ class TrainingPipeline:
         self._update_progress(len(self.stock_list), len(self.stock_list), '合并数据', '')
         start_time = time.time()
 
-        total_rows = sum(len(X) for X in self.all_X)
-        n_features = self.all_X[0].shape[1]
-        feature_names = self.all_X[0].columns.tolist()
+        # 按股票代码排序，确保数据顺序一致（多线程收集顺序不确定）
+        sorted_indices = sorted(range(len(self.all_stock_codes)), key=lambda i: self.all_stock_codes[i])
+        sorted_X = [self.all_X[i] for i in sorted_indices]
+        sorted_y = [self.all_y[i] for i in sorted_indices]
+
+        total_rows = sum(len(X) for X in sorted_X)
+        n_features = sorted_X[0].shape[1]
+        feature_names = sorted_X[0].columns.tolist()
 
         _log(f'[数据处理] 样本总数: {total_rows}, 特征数: {n_features}')
 
@@ -207,7 +215,7 @@ class TrainingPipeline:
         combined_y = np.empty(total_rows, dtype=np.float32)
 
         offset = 0
-        for X, y in zip(self.all_X, self.all_y):
+        for X, y in zip(sorted_X, sorted_y):
             n = len(X)
             combined_X[offset:offset+n] = X.values
             combined_y[offset:offset+n] = y.values
@@ -216,31 +224,42 @@ class TrainingPipeline:
         merge_time = time.time() - start_time
         _log(f'[数据处理] 数据合并完成，耗时 {merge_time:.2f}秒')
 
-        self._update_progress(len(self.stock_list), len(self.stock_list), '归一化', '')
-        _log(f'[归一化] 开始归一化 {n_features} 个特征...')
-        _log(f'[归一化] 特征列表: {feature_names[:10]}{"..." if len(feature_names) > 10 else ""}')
-        normalize_start = time.time()
+        if self.normalize:
+            self._update_progress(len(self.stock_list), len(self.stock_list), '归一化', '')
+            _log(f'[归一化] 开始归一化 {n_features} 个特征...')
+            _log(f'[归一化] 特征列表: {feature_names[:10]}{"..." if len(feature_names) > 10 else ""}')
+            normalize_start = time.time()
 
-        if self.use_gpu:
-            try:
-                import cupy as cp
-                _log('[归一化] 使用 GPU (cupy) 进行归一化')
-                X_gpu = cp.asarray(combined_X)
-                mean = cp.mean(X_gpu, axis=0)
-                std = cp.std(X_gpu, axis=0)
-                std[std == 0] = 1
-                X_normalized_gpu = (X_gpu - mean) / std
-                combined_X_scaled = cp.asnumpy(X_normalized_gpu)
-                scaler_params = {
-                    'mean': cp.asnumpy(mean).tolist(),
-                    'scale': cp.asnumpy(std).tolist(),
-                    'n_features_in_': n_features,
-                    'feature_names': feature_names
-                }
-                del X_gpu, X_normalized_gpu
-                cp.get_default_memory_pool().free_all_blocks()
-            except ImportError:
-                _log('[归一化] cupy 未安装，回退到 CPU 归一化', 'WARN')
+            if self.use_gpu:
+                try:
+                    import cupy as cp
+                    _log('[归一化] 使用 GPU (cupy) 进行归一化')
+                    X_gpu = cp.asarray(combined_X)
+                    mean = cp.mean(X_gpu, axis=0)
+                    std = cp.std(X_gpu, axis=0)
+                    std[std == 0] = 1
+                    X_normalized_gpu = (X_gpu - mean) / std
+                    combined_X_scaled = cp.asnumpy(X_normalized_gpu)
+                    scaler_params = {
+                        'mean': cp.asnumpy(mean).tolist(),
+                        'scale': cp.asnumpy(std).tolist(),
+                        'n_features_in_': n_features,
+                        'feature_names': feature_names
+                    }
+                    del X_gpu, X_normalized_gpu
+                    cp.get_default_memory_pool().free_all_blocks()
+                except ImportError:
+                    _log('[归一化] cupy 未安装，回退到 CPU 归一化', 'WARN')
+                    scaler = StandardScaler()
+                    combined_X_scaled = scaler.fit_transform(combined_X)
+                    scaler_params = {
+                        'mean': scaler.mean_.tolist(),
+                        'scale': scaler.scale_.tolist(),
+                        'n_features_in_': n_features,
+                        'feature_names': feature_names
+                    }
+            else:
+                _log('[归一化] 使用 CPU (StandardScaler) 进行归一化')
                 scaler = StandardScaler()
                 combined_X_scaled = scaler.fit_transform(combined_X)
                 scaler_params = {
@@ -249,34 +268,40 @@ class TrainingPipeline:
                     'n_features_in_': n_features,
                     'feature_names': feature_names
                 }
-        else:
-            _log('[归一化] 使用 CPU (StandardScaler) 进行归一化')
-            scaler = StandardScaler()
-            combined_X_scaled = scaler.fit_transform(combined_X)
-            scaler_params = {
-                'mean': scaler.mean_.tolist(),
-                'scale': scaler.scale_.tolist(),
-                'n_features_in_': n_features,
-                'feature_names': feature_names
+
+            normalize_time = time.time() - normalize_start
+            _log(f'[归一化] 完成，耗时 {normalize_time:.2f}秒')
+
+            combined_X_scaled = pd.DataFrame(combined_X_scaled, columns=feature_names)
+            combined_y = pd.Series(combined_y)
+
+            self.all_X = [combined_X_scaled]
+            self.all_y = [combined_y]
+
+            total_time = time.time() - start_time
+            _log(f'[数据处理] 全部完成，总耗时 {total_time:.2f}秒，最终样本数: {len(combined_X_scaled)}')
+            self.training_result = {
+                'all_X': self.all_X,
+                'all_y': self.all_y,
+                'stock_sample_counts': {'统一数据': len(combined_X_scaled)},
+                'scaler_params': scaler_params
             }
+        else:
+            _log('[归一化] 跳过特征归一化')
+            combined_X_df = pd.DataFrame(combined_X, columns=feature_names)
+            combined_y_series = pd.Series(combined_y)
 
-        normalize_time = time.time() - normalize_start
-        _log(f'[归一化] 完成，耗时 {normalize_time:.2f}秒')
+            self.all_X = [combined_X_df]
+            self.all_y = [combined_y_series]
 
-        combined_X_scaled = pd.DataFrame(combined_X_scaled, columns=feature_names)
-        combined_y = pd.Series(combined_y)
-
-        self.all_X = [combined_X_scaled]
-        self.all_y = [combined_y]
-
-        total_time = time.time() - start_time
-        _log(f'[数据处理] 全部完成，总耗时 {total_time:.2f}秒，最终样本数: {len(combined_X_scaled)}')
-        self.training_result = {
-            'all_X': self.all_X,
-            'all_y': self.all_y,
-            'stock_sample_counts': {'统一数据': len(combined_X_scaled)},
-            'scaler_params': scaler_params
-        }
+            total_time = time.time() - start_time
+            _log(f'[数据处理] 全部完成，总耗时 {total_time:.2f}秒，最终样本数: {len(combined_X_df)}')
+            self.training_result = {
+                'all_X': self.all_X,
+                'all_y': self.all_y,
+                'stock_sample_counts': {'统一数据': len(combined_X_df)},
+                'scaler_params': None
+            }
 
     def run(self):
         t1 = threading.Thread(target=self.thread1_data_loader, name='DataLoader')
