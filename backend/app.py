@@ -481,7 +481,7 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
                 lower_q=lower_q,
                 upper_q=upper_q,
                 mode=mode,
-                is_ensemble=True,
+                is_ensemble=False,
                 parent_model_id=parent_id
             )
             trained_models.append(sub_model_info)
