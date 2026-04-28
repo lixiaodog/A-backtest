@@ -21,7 +21,7 @@ MACD策略模板
 """
 
 import backtrader as bt
-from strategies.base_strategy import BaseStrategy
+from backend.strategies.base_strategy import BaseStrategy
 
 class MACDFramework(BaseStrategy):
     """

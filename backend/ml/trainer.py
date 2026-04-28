@@ -20,7 +20,7 @@ def _log(message, level='INFO'):
 class ModelTrainer:
     def __init__(self, models_dir=None, progress_callback=None):
         if models_dir is None:
-            models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+            models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models')
         self.models_dir = models_dir
         self.progress_callback = progress_callback
         os.makedirs(self.models_dir, exist_ok=True)

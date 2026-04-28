@@ -1,8 +1,0 @@
-{
-  "local": {
-    "data_path": "./data/"
-  },
-  "sqlite": {
-    "db_path": "./data/stock_data.db"
-  }
-}

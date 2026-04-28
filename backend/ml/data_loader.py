@@ -8,7 +8,7 @@ class MLDataLoader:
 
     def __init__(self, data_dir=None):
         if data_dir is None:
-            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
 

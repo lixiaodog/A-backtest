@@ -10,7 +10,7 @@ class LocalCacheProvider(BaseDataProvider):
 
     def __init__(self, cache_dir: str = None):
         if cache_dir is None:
-            cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+            cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
 

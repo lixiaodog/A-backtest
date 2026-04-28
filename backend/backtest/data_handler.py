@@ -3,9 +3,9 @@ from datetime import datetime, timezone, timedelta
 from backtrader.feeds import PandasData
 import os
 
-from providers import DataProviderManager
+from backend.providers import DataProviderManager
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'data')
 
 _data_provider_manager = None
 

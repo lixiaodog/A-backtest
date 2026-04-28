@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def _process_single_stock(args):
     stock_code, params = args
     try:
-        from ml import MLDataLoader, FeatureEngineer
+        from backend.ml import MLDataLoader, FeatureEngineer
 
         data_loader = MLDataLoader()
         raw_data = data_loader.load_stock_data(
@@ -64,7 +64,7 @@ def _process_single_stock(args):
 
 def parallel_train(stock_list, params, task_id=None, training_tasks=None):
     """多进程训练 - 在后台线程中完成整个训练流程"""
-    from ml import ModelTrainer, ModelRegistry
+    from backend.ml import ModelTrainer, ModelRegistry
 
     trainer = ModelTrainer()
     registry = ModelRegistry()
@@ -312,7 +312,7 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
 
 
 if __name__ == '__main__':
-    from ml import MLDataLoader
+    from backend.ml import MLDataLoader
 
     params = {
         'start_date': '20230101',

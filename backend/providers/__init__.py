@@ -122,3 +122,21 @@ def get_provider(provider_type: str, **kwargs) -> DataProvider:
 def create_provider(provider_type: str, **kwargs) -> DataProvider:
     """创建 Provider 实例的便捷函数"""
     return ProviderFactory.create_provider(provider_type, **kwargs)
+
+
+# 回测用数据提供者（从根目录 providers/ 合并）
+from backend.providers.base_provider import BaseDataProvider
+from backend.providers.cache_provider import LocalCacheProvider
+from backend.providers.tushare_provider import TushareProvider
+from backend.providers.manager import DataProviderManager
+
+__all__ = [
+    'DataProvider',
+    'ProviderFactory',
+    'get_provider',
+    'create_provider',
+    'BaseDataProvider',
+    'LocalCacheProvider',
+    'TushareProvider',
+    'DataProviderManager',
+]

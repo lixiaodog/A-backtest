@@ -76,7 +76,7 @@ class ModelEvaluator:
         self._lock = threading.Lock()
 
     def create_task(self, model_id, sectors, start_date, end_date, validation_ratio=0.2):
-        from ml import ModelRegistry
+        from backend.ml import ModelRegistry
 
         registry = ModelRegistry()
         model_info = registry.get_model_by_id(model_id)
@@ -214,7 +214,7 @@ class ModelEvaluator:
             traceback.print_exc()
 
     def _load_model(self, model_info):
-        from ml import ModelTrainer, ModelRegistry
+        from backend.ml import ModelTrainer, ModelRegistry
         import pickle
 
         trainer = ModelTrainer()
@@ -263,7 +263,7 @@ class ModelEvaluator:
         return model, ensemble_models
 
     def _load_and_prepare_data(self, task):
-        from ml import MLDataLoader, FeatureEngineer
+        from backend.ml import MLDataLoader, FeatureEngineer
 
         data_loader = MLDataLoader()
         feature_engineer = FeatureEngineer()

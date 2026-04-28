@@ -142,7 +142,7 @@ class StrategyManager:
 
         code = f'''
 import backtrader as bt
-from strategies.base_strategy import BaseStrategy
+from backend.strategies.base_strategy import BaseStrategy
 
 class {strategy['name'].replace(' ', '')}(BaseStrategy):
     params = (

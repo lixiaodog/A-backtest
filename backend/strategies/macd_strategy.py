@@ -1,5 +1,5 @@
 import backtrader as bt
-from strategies.base_strategy import BaseStrategy
+from backend.strategies.base_strategy import BaseStrategy
 
 class MACDStrategy(BaseStrategy):
     params = (

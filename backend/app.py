@@ -17,8 +17,8 @@ import backtrader as bt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_handler import get_astock_hist_data, load_csv_data, AStockData
-from backtest_engine import AStockBacktestEngine
+from backend.backtest.data_handler import get_astock_hist_data, load_csv_data, AStockData
+from backend.backtest.engine import AStockBacktestEngine
 
 
 def _log(message, level='INFO'):
@@ -297,8 +297,8 @@ def _run_training_task(task_id, stock_list, market, period, model_name, start_da
                         lower_q, upper_q, mode, use_ensemble, total_stocks, prepare_func,
                         task_index=0, total_tasks=1, data_source='csv', use_gpu=False, fast_mode=False, normalize=False):
     """后台线程执行单个训练任务"""
-    from ml import ModelTrainer, ModelRegistry
-    from ml.model_naming import generate_model_name
+    from backend.ml import ModelTrainer, ModelRegistry
+    from backend.ml.model_naming import generate_model_name
     from backend.pipeline import TrainingPipeline
 
     def progress_callback(message, progress=None):
@@ -868,7 +868,7 @@ def ml_train():
     _log(f'[训练] 任务ID: {task_id} - 开始训练')
 
     try:
-        from ml.model_naming import generate_model_name
+        from backend.ml.model_naming import generate_model_name
         data = request.json
         stock_param = data.get('stock_code') or data.get('stock') or data.get('stocks')
         market = data.get('market', 'SZ')
@@ -1038,7 +1038,7 @@ def ml_train_incremental():
         new_start_date = data.get('new_start_date')
         new_end_date = data.get('new_end_date')
 
-        from ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
+        from backend.ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
 
         registry = ModelRegistry()
         base_model_info = registry.get_model_by_id(base_model_id)
@@ -1120,8 +1120,8 @@ def ml_predict():
         if not stock_codes or not stock_codes[0]:
             return jsonify({'error': '缺少股票代码'}), 400
 
-        from ml import FeatureEngineer, ModelTrainer, ModelRegistry
-        from ml.model_naming import generate_model_name
+        from backend.ml import FeatureEngineer, ModelTrainer, ModelRegistry
+        from backend.ml.model_naming import generate_model_name
 
         registry = ModelRegistry()
         model_info = registry.get_model_by_id(model_id)
@@ -1139,7 +1139,7 @@ def ml_predict():
         trainer = ModelTrainer()
         model = trainer.load_model(model_info['file_path'])
 
-        from ml.predictors import Predictor
+        from backend.ml.predictors import Predictor
 
         mode = model_info.get('mode', 'classification')
         label_type = model_info.get('label_type', 'fixed')
@@ -1445,7 +1445,7 @@ def ml_predict_advanced():
             provider = ProviderFactory.create_provider('akshare')
 
         from backend.advanced_predictor import AdvancedPredictor, register_task, get_task_predictor
-        from ml import ModelRegistry
+        from backend.ml import ModelRegistry
         
         # 获取模型模式（从第一个模型推断）
         model_mode = "classification"
@@ -1680,7 +1680,7 @@ def ml_download_prediction_file(task_id, file_key):
 def ml_get_models():
     try:
         stock_code = request.args.get('stock')
-        from ml import ModelRegistry
+        from backend.ml import ModelRegistry
         registry = ModelRegistry()
 
         if stock_code:
@@ -1737,7 +1737,7 @@ def ml_get_models():
 @app.route('/api/ml/models/<model_id>', methods=['DELETE'])
 def ml_delete_model(model_id):
     try:
-        from ml import ModelRegistry
+        from backend.ml import ModelRegistry
         registry = ModelRegistry()
         success = registry.delete_model(model_id)
 
@@ -1816,7 +1816,7 @@ def ml_delete_train_task(task_id):
 @app.route('/api/ml/features', methods=['GET'])
 def ml_get_features():
     try:
-        from ml import FeatureEngineer
+        from backend.ml import FeatureEngineer
         feature_engineer = FeatureEngineer()
         feature_type = request.args.get('type', 'all')
         if feature_type == 'alpha191':
@@ -1834,7 +1834,7 @@ def ml_get_stocks():
     try:
         market = request.args.get('market')
         period = request.args.get('period', '1d')
-        from ml import MLDataLoader
+        from backend.ml import MLDataLoader
         loader = MLDataLoader()
         stocks = loader.get_available_stocks(market=market, period=period)
         return jsonify(stocks)
@@ -1844,7 +1844,7 @@ def ml_get_stocks():
 @app.route('/api/ml/markets', methods=['GET'])
 def ml_get_markets():
     try:
-        from ml import MLDataLoader
+        from backend.ml import MLDataLoader
         loader = MLDataLoader()
         markets = loader.get_markets()
         return jsonify(markets)
@@ -1855,7 +1855,7 @@ def ml_get_markets():
 def ml_get_periods():
     try:
         market = request.args.get('market')
-        from ml import MLDataLoader
+        from backend.ml import MLDataLoader
         loader = MLDataLoader()
         periods = loader.get_periods(market=market)
         return jsonify(periods)
@@ -1865,7 +1865,7 @@ def ml_get_periods():
 @app.route('/api/ml/data-tree', methods=['GET'])
 def ml_get_data_tree():
     try:
-        from ml import MLDataLoader
+        from backend.ml import MLDataLoader
         loader = MLDataLoader()
         tree = loader.get_data_tree()
         return jsonify(tree)

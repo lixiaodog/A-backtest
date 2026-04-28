@@ -8,7 +8,7 @@ from datetime import datetime
 class ModelRegistry:
     def __init__(self, registry_path=None, models_dir=None):
         if registry_path is None:
-            registry_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'model_registry.json')
+            registry_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models', 'model_registry.json')
         if models_dir is None:
             models_dir = os.path.dirname(registry_path)
         self.registry_path = registry_path

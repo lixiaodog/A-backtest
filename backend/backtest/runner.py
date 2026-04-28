@@ -2,11 +2,11 @@ import argparse
 import sys
 from datetime import datetime
 
-from data_handler import get_astock_hist_data, AStockData
-from backtest_engine import AStockBacktestEngine
-from strategies.sma_cross import SMACrossStrategy
-from strategies.momentum import MomentumStrategy
-from strategies.rsi_strategy import RSIStrategy
+from backend.backtest.data_handler import get_astock_hist_data, AStockData
+from backend.backtest.engine import AStockBacktestEngine
+from backend.strategies.sma_cross import SMACrossStrategy
+from backend.strategies.momentum import MomentumStrategy
+from backend.strategies.rsi_strategy import RSIStrategy
 
 STRATEGY_MAP = {
     'sma_cross': SMACrossStrategy,

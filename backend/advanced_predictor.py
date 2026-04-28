@@ -38,8 +38,8 @@ def _predict_single_stock_process(args) -> Optional[PredictionResult]:
         import joblib
         import pandas as pd
         import numpy as np
-        from ml.predictors import Predictor
-        from ml.feature_engineering import FeatureEngineer
+        from backend.ml.predictors import Predictor
+        from backend.ml.feature_engineering import FeatureEngineer
         from backend.providers.local_provider import LocalDataProvider
         from backend.providers.factor_cache_provider import FactorCacheProvider
         
@@ -319,7 +319,7 @@ class AdvancedPredictor:
                     if model_info.get('mode') == 'regression' or model_info.get('label_type') == 'regression':
                         is_regression = True
                 else:
-                    from ml import ModelRegistry
+                    from backend.ml import ModelRegistry
                     registry = ModelRegistry()
                     sub_models = registry.get_models_by_parent_id(model_id)
                     if sub_models:
@@ -386,7 +386,7 @@ class AdvancedPredictor:
             return 'SZ'
 
     def _get_model_info(self, model_id: str) -> Optional[Dict]:
-        from ml import ModelRegistry
+        from backend.ml import ModelRegistry
         try:
             registry = ModelRegistry()
             model_info = registry.get_model_by_id(model_id)
@@ -398,8 +398,8 @@ class AdvancedPredictor:
 
     def _predict_with_model(self, model_id: str, stocks: List[str],
                            task: PredictionTask) -> List[PredictionResult]:
-        from ml import ModelRegistry
-        from ml.predictors import Predictor
+        from backend.ml import ModelRegistry
+        from backend.ml.predictors import Predictor
 
         results = []
         
@@ -452,7 +452,7 @@ class AdvancedPredictor:
     def _predict_sequential(self, model_id: str, model_info: Dict, 
                            stocks: List[str], task: PredictionTask) -> List[PredictionResult]:
         import joblib
-        from ml.predictors import Predictor
+        from backend.ml.predictors import Predictor
         import numpy as np
         
         print(f"[AdvancedPredictor] _predict_sequential 开始: 模型={model_id}, 股票数={len(stocks)}", flush=True)
@@ -641,8 +641,8 @@ class AdvancedPredictor:
 
     def _predict_parallel(self, model_id: str, model_info: Dict,
                          stocks: List[str], task: PredictionTask) -> List[PredictionResult]:
-        from ml.predictors import Predictor
-        from ml.feature_engineering import FeatureEngineer
+        from backend.ml.predictors import Predictor
+        from backend.ml.feature_engineering import FeatureEngineer
 
         results = []
         success_count = 0

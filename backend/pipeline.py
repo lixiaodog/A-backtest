@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 import pandas as pd
 import numpy as np
-from ml import MLDataLoader, FeatureEngineer
+from backend.ml import MLDataLoader, FeatureEngineer
 
 
 def _log(message, level='INFO'):
@@ -157,7 +157,7 @@ class TrainingPipeline:
         _log(f'[特征生成-{worker_id}] 完成，共处理 {processed} 只股票')
 
     def thread3_trainer(self):
-        from ml.feature_engineering import FeatureEngineer
+        from backend.ml.feature_engineering import FeatureEngineer
         from sklearn.preprocessing import StandardScaler
 
         _log('[数据处理] 开始收集特征数据')
