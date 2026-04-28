@@ -428,14 +428,8 @@ class FactorCacheManager:
         """
         计算并保存因子（全量）
         """
-        import sys
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        ml_path = os.path.join(project_root, 'ml')
-        if ml_path not in sys.path:
-            sys.path.insert(0, ml_path)
-        
         if factor_library == 'alpha191':
-            from alpha191 import Alpha191
+            from backend.ml.alpha191 import Alpha191
             calculator = Alpha191()
             factors = calculator.get_all_alphas(raw_data)
         elif factor_library == 'technical':
@@ -488,7 +482,7 @@ class FactorCacheManager:
             start_idx = max(0, len(raw_data) - len(new_data) - window_size)
             extended_data = raw_data.iloc[start_idx:]
             
-            from alpha191 import Alpha191
+            from backend.ml.alpha191 import Alpha191
             calculator = Alpha191()
             new_factors = calculator.get_all_alphas(extended_data)
             # 只保存新日期的数据
