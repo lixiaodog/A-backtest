@@ -414,7 +414,7 @@ class AdvancedPredictor:
                 sub_models = model_info.get('sub_models', [])
                 if sub_models:
                     print(f"[AdvancedPredictor] 集成模型 {model_id} 包含 {len(sub_models)} 个子模型", flush=True)
-                    all_results = []
+                    stock_results = {}
                     for sub_model_info in sub_models:
                         sub_model_id = sub_model_info.get('id')
                         sub_model_full = registry.get_model_by_id(sub_model_id)
@@ -429,14 +429,38 @@ class AdvancedPredictor:
                             sub_results = self._predict_sequential(model_id, sub_model_full, stocks, task)
                         else:
                             sub_results = self._predict_parallel(model_id, sub_model_full, stocks, task)
-                        all_results.extend(sub_results)
-                    return all_results
+                        
+                        for r in sub_results:
+                            if r.stock_code not in stock_results:
+                                stock_results[r.stock_code] = []
+                            stock_results[r.stock_code].append(r)
+                    
+                    aggregated = []
+                    for stock_code, preds in stock_results.items():
+                        if len(preds) == 1:
+                            aggregated.append(preds[0])
+                        else:
+                            avg_return = sum(p.predicted_return for p in preds) / len(preds)
+                            avg_confidence = sum(p.confidence for p in preds) / len(preds)
+                            best = max(preds, key=lambda x: x.predicted_return)
+                            aggregated.append(PredictionResult(
+                                stock_code=stock_code,
+                                predicted_return=avg_return,
+                                confidence=avg_confidence,
+                                buy_prob=best.buy_prob,
+                                hold_prob=best.hold_prob,
+                                sell_prob=best.sell_prob,
+                                signal=best.signal,
+                                features=best.features
+                            ))
+                    print(f"[AdvancedPredictor] 集成模型聚合: {len(aggregated)} 只股票", flush=True)
+                    return aggregated
             
             if not model_info:
                 sub_models = registry.get_models_by_parent_id(model_id)
                 if sub_models:
                     print(f"[AdvancedPredictor] 集成模型 {model_id} 包含 {len(sub_models)} 个子模型", flush=True)
-                    all_results = []
+                    stock_results = {}
                     for sub_model in sub_models:
                         source_type = 'local'
                         if hasattr(self, 'data_provider'):
@@ -446,8 +470,32 @@ class AdvancedPredictor:
                             sub_results = self._predict_sequential(model_id, sub_model, stocks, task)
                         else:
                             sub_results = self._predict_parallel(model_id, sub_model, stocks, task)
-                        all_results.extend(sub_results)
-                    return all_results
+                        
+                        for r in sub_results:
+                            if r.stock_code not in stock_results:
+                                stock_results[r.stock_code] = []
+                            stock_results[r.stock_code].append(r)
+                    
+                    aggregated = []
+                    for stock_code, preds in stock_results.items():
+                        if len(preds) == 1:
+                            aggregated.append(preds[0])
+                        else:
+                            avg_return = sum(p.predicted_return for p in preds) / len(preds)
+                            avg_confidence = sum(p.confidence for p in preds) / len(preds)
+                            best = max(preds, key=lambda x: x.predicted_return)
+                            aggregated.append(PredictionResult(
+                                stock_code=stock_code,
+                                predicted_return=avg_return,
+                                confidence=avg_confidence,
+                                buy_prob=best.buy_prob,
+                                hold_prob=best.hold_prob,
+                                sell_prob=best.sell_prob,
+                                signal=best.signal,
+                                features=best.features
+                            ))
+                    print(f"[AdvancedPredictor] 集成模型聚合: {len(aggregated)} 只股票", flush=True)
+                    return aggregated
                 else:
                     print(f"[AdvancedPredictor] 模型 {model_id} 不存在", flush=True)
                     return results
