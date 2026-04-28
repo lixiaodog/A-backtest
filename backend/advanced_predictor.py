@@ -410,6 +410,28 @@ class AdvancedPredictor:
             if not model_info:
                 model_info = registry.get_model_by_parent_id(model_id)
             
+            if model_info and model_info.get('is_ensemble'):
+                sub_models = model_info.get('sub_models', [])
+                if sub_models:
+                    print(f"[AdvancedPredictor] 集成模型 {model_id} 包含 {len(sub_models)} 个子模型", flush=True)
+                    all_results = []
+                    for sub_model_info in sub_models:
+                        sub_model_id = sub_model_info.get('id')
+                        sub_model_full = registry.get_model_by_id(sub_model_id)
+                        if not sub_model_full:
+                            continue
+                        
+                        source_type = 'local'
+                        if hasattr(self, 'data_provider'):
+                            source_type = self.data_provider.name
+                        
+                        if source_type == 'factor_cache':
+                            sub_results = self._predict_sequential(model_id, sub_model_full, stocks, task)
+                        else:
+                            sub_results = self._predict_parallel(model_id, sub_model_full, stocks, task)
+                        all_results.extend(sub_results)
+                    return all_results
+            
             if not model_info:
                 sub_models = registry.get_models_by_parent_id(model_id)
                 if sub_models:

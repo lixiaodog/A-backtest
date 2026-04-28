@@ -94,6 +94,27 @@ class ModelRegistry:
             if model['id'] == model_id or model['model_name'] == model_id:
                 return model
 
+        sub_models = [m for m in data['models'] if m.get('parent_model_id') == model_id]
+        if sub_models:
+            first_sub = sub_models[0]
+            model_types = list(set(m.get('model_type', 'Unknown') for m in sub_models))
+            parent_info = {
+                'id': model_id,
+                'model_name': first_sub.get('model_name', model_id).rsplit('_', 2)[0] if '_' in first_sub.get('model_name', '') else model_id,
+                'model_type': f"集成({', '.join(model_types)})",
+                'features': first_sub.get('features', []),
+                'feature_count': first_sub.get('feature_count', 0),
+                'mode': first_sub.get('mode', 'classification'),
+                'is_ensemble': True,
+                'sub_models': [{'id': m['id'], 'model_type': m.get('model_type', 'Unknown')} for m in sub_models],
+                'threshold': first_sub.get('threshold', 0.02),
+                'horizon': first_sub.get('horizon', 5),
+                'label_type': first_sub.get('label_type', 'fixed'),
+                'stock_code': first_sub.get('stock_code', ''),
+                'created_at': min(m.get('created_at', '') for m in sub_models if m.get('created_at')),
+            }
+            return parent_info
+
         filepath = os.path.join(self.models_dir, f'{model_id}.pkl')
         if os.path.exists(filepath):
             model_info = {
