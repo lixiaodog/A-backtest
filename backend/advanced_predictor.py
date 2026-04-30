@@ -445,13 +445,17 @@ class AdvancedPredictor:
                             best = max(preds, key=lambda x: x.predicted_return)
                             aggregated.append(PredictionResult(
                                 stock_code=stock_code,
+                                stock_name=best.stock_name,
+                                model_id=best.model_id,
+                                model_type=best.model_type,
+                                model_name=best.model_name,
                                 predicted_return=avg_return,
                                 confidence=avg_confidence,
-                                buy_prob=best.buy_prob,
-                                hold_prob=best.hold_prob,
-                                sell_prob=best.sell_prob,
+                                buy_probability=best.buy_probability,
+                                hold_probability=best.hold_probability,
+                                sell_probability=best.sell_probability,
                                 signal=best.signal,
-                                features=best.features
+                                mode=best.mode
                             ))
                     print(f"[AdvancedPredictor] 集成模型聚合: {len(aggregated)} 只股票", flush=True)
                     return aggregated
@@ -486,13 +490,17 @@ class AdvancedPredictor:
                             best = max(preds, key=lambda x: x.predicted_return)
                             aggregated.append(PredictionResult(
                                 stock_code=stock_code,
+                                stock_name=best.stock_name,
+                                model_id=best.model_id,
+                                model_type=best.model_type,
+                                model_name=best.model_name,
                                 predicted_return=avg_return,
                                 confidence=avg_confidence,
-                                buy_prob=best.buy_prob,
-                                hold_prob=best.hold_prob,
-                                sell_prob=best.sell_prob,
+                                buy_probability=best.buy_probability,
+                                hold_probability=best.hold_probability,
+                                sell_probability=best.sell_probability,
                                 signal=best.signal,
-                                features=best.features
+                                mode=best.mode
                             ))
                     print(f"[AdvancedPredictor] 集成模型聚合: {len(aggregated)} 只股票", flush=True)
                     return aggregated
@@ -1114,16 +1122,68 @@ class AdvancedPredictor:
 
         return fused
 
+    def _generate_model_filename(self, task: PredictionTask, model_id: str, results: list, model_info: dict = None) -> str:
+        """生成有意义的模型文件名
+        
+        格式: {市场}_{周期}_{模型类型}_{训练日期}_{预测天数}h_{模式}_{阈值}t_{波动窗口}v_{股票数量}stocks
+        例如: SZ_1d_ENS_20260424_5h_reg_0.02t_20v_2891stocks
+        """
+        markets = task.markets if task.markets else ['ALL']
+        market_str = ''.join(markets[:2]) if len(markets) <= 2 else markets[0]
+        
+        period = task.period or '1d'
+        
+        model_type = 'Unknown'
+        horizon = 5
+        threshold = 0.02
+        vol_window = 20
+        mode = 'classification'
+        train_date = ''
+        
+        if model_info:
+            raw_model_type = model_info.get('model_type', 'Unknown')
+            if model_info.get('is_ensemble'):
+                model_type = 'ENS'
+            elif 'RandomForest' in raw_model_type:
+                model_type = 'RF'
+            elif 'LightGBM' in raw_model_type:
+                model_type = 'LGB'
+            elif 'Ridge' in raw_model_type:
+                model_type = 'Ridge'
+            else:
+                model_type = raw_model_type[:3].upper() if len(raw_model_type) >= 3 else raw_model_type.upper()
+            
+            horizon = model_info.get('horizon', 5)
+            threshold = model_info.get('threshold', 0.02)
+            vol_window = model_info.get('vol_window', 20)
+            mode = model_info.get('mode', 'classification')
+            
+            created_at = model_info.get('created_at', '')
+            if created_at:
+                train_date = created_at[:10].replace('-', '')
+        
+        mode_str = 'reg' if mode == 'regression' else 'cls'
+        stock_count = len(results)
+        
+        filename = f"{market_str}_{period}_{model_type}"
+        if train_date:
+            filename += f"_{train_date}"
+        filename += f"_{horizon}h_{mode_str}_{threshold}t_{vol_window}v_{stock_count}stocks"
+        
+        return filename
+
     def _export_results_to_excel(self, task: PredictionTask):
         try:
             import pandas as pd
             from datetime import datetime
             import os
+            from backend.ml import ModelRegistry
             
             export_dir = os.path.join(os.path.dirname(__file__), '..', 'exports')
             os.makedirs(export_dir, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            registry = ModelRegistry()
             
             for model_id, results in task.results.items():
                 if not results:
@@ -1133,6 +1193,10 @@ class AdvancedPredictor:
                 
                 first_result = results[0]
                 is_regression = first_result.mode == "regression"
+                
+                model_info = registry.get_model_by_id(model_id)
+                if not model_info:
+                    model_info = registry.get_model_by_parent_id(model_id)
                 
                 data = []
                 for r in results:
@@ -1164,8 +1228,8 @@ class AdvancedPredictor:
                 
                 df = pd.DataFrame(data)
                 
-                mode_suffix = 'regression' if is_regression else 'classification'
-                filename = f"predict_{task.task_id}_{model_id[:8]}_{mode_suffix}_{timestamp}.xlsx"
+                model_filename = self._generate_model_filename(task, model_id, results, model_info)
+                filename = f"{model_filename}_{timestamp}.xlsx"
                 filepath = os.path.join(export_dir, filename)
                 
                 df.to_excel(filepath, index=False, sheet_name='预测结果')
@@ -1203,8 +1267,15 @@ class AdvancedPredictor:
                     data.append(row)
                 
                 df = pd.DataFrame(data)
-                mode_suffix = 'regression' if is_regression else 'classification'
-                filename = f"predict_{task.task_id}_fused_{mode_suffix}_{timestamp}.xlsx"
+                
+                markets = task.markets if task.markets else ['ALL']
+                market_str = ''.join(markets[:2]) if len(markets) <= 2 else markets[0]
+                period = task.period or '1d'
+                mode_str = 'reg' if is_regression else 'cls'
+                stock_count = len(task.fused_results)
+                model_count = len(task.model_ids)
+                
+                filename = f"{market_str}_{period}_FUSED_{model_count}models_{mode_str}_{stock_count}stocks_{timestamp}.xlsx"
                 filepath = os.path.join(export_dir, filename)
                 df.to_excel(filepath, index=False, sheet_name='融合结果')
                 

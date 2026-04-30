@@ -887,15 +887,26 @@ function MLPanel() {
     const renderDownloadLinks = () => {
       if (!export_files || Object.keys(export_files).length === 0) return null
       
+      const task_id = advancedPredictResults?.task_id
+      
       return (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 'bold', marginBottom: 8 }}>导出文件:</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <Button 
+              size="small" 
+              type="primary"
+              icon={<DownloadOutlined />}
+              style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
+              onClick={() => window.open(`http://localhost:5000/api/ml/predict/advanced/${task_id}/download_all`, '_blank')}
+            >
+              一键下载全部
+            </Button>
+            <Divider type="vertical" style={{ backgroundColor: '#444', height: 20 }} />
             {Object.entries(export_files).map(([key, file]) => (
               <Button 
                 key={key}
                 size="small" 
-                type="primary"
                 icon={<DownloadOutlined />}
                 onClick={() => window.open(`http://localhost:5000${file.url}`, '_blank')}
               >
@@ -1687,7 +1698,7 @@ function MLPanel() {
                     const dataSource = getFieldValue('data_source');
                     return dataSource === 'akshare' ? (
                       <>
-                        <Form.Item name="markets" label="选择市场">
+                        <Form.Item name="markets" label="选择市场" initialValue={['SZ']}>
                           <Checkbox.Group>
                             <Checkbox value="SZ">深圳(SZ)</Checkbox>
                             <Checkbox value="SH">上海(SH)</Checkbox>
@@ -1699,7 +1710,7 @@ function MLPanel() {
                         </Form.Item>
                       </>
                     ) : (
-                      <Form.Item name="markets" label="选择市场">
+                      <Form.Item name="markets" label="选择市场" initialValue={['SZ']}>
                         <Checkbox.Group>
                           <Checkbox value="SZ">深圳(SZ)</Checkbox>
                           <Checkbox value="SH">上海(SH)</Checkbox>
@@ -1730,7 +1741,7 @@ function MLPanel() {
 
                 <Row gutter={8}>
                   <Col span={12}>
-                    <Form.Item name="sort_by" label="排序依据" initialValue="confidence">
+                    <Form.Item name="sort_by" label="排序依据" initialValue="return">
                       <Select>
                         <Select.Option value="confidence">置信度</Select.Option>
                         <Select.Option value="buy_probability">买入概率</Select.Option>
@@ -1774,7 +1785,7 @@ function MLPanel() {
                 </Form.Item>
 
                 <Form.Item name="predict_date" label="预测日期" tooltip="留空则使用最新数据">
-                  <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" />
+                  <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" defaultValue={dayjs()} />
                 </Form.Item>
 
                 <Button

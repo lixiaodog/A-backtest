@@ -477,8 +477,8 @@ class FactorCacheManager:
         
         # 计算新数据（需要包含窗口期）
         if factor_library == 'alpha191':
-            # Alpha191主要用20天窗口
-            window_size = 30
+            # Alpha191最大窗口期是250天（alpha_019使用_sum(returns, 250)）
+            window_size = 260
             start_idx = max(0, len(raw_data) - len(new_data) - window_size)
             extended_data = raw_data.iloc[start_idx:]
             

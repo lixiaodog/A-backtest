@@ -1137,7 +1137,28 @@ def ml_predict():
         threshold = data.get('threshold', model_info.get('threshold', 0.02))
 
         trainer = ModelTrainer()
-        model = trainer.load_model(model_info['file_path'])
+        
+        # 检查是否是集成模型
+        is_ensemble = model_info.get('is_ensemble', False)
+        sub_models_list = model_info.get('sub_models', [])
+        
+        model = None
+        ensemble_models = None
+        
+        if is_ensemble and sub_models_list:
+            # 集成模型：加载所有子模型
+            ensemble_models = {}
+            for sub in sub_models_list:
+                sub_model_info = registry.get_model_by_id(sub['id'])
+                if sub_model_info and sub_model_info.get('file_path'):
+                    sub_model = trainer.load_model(sub_model_info['file_path'])
+                    ensemble_models[sub['model_type']] = sub_model
+            print(f'[预测] 集成模型，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+        elif model_info.get('file_path'):
+            # 单模型：直接加载
+            model = trainer.load_model(model_info['file_path'])
+        else:
+            return jsonify({'error': '模型文件路径不存在'}), 404
 
         from backend.ml.predictors import Predictor
 
@@ -1156,44 +1177,45 @@ def ml_predict():
 
         model_name = model_info.get('model_name', '')
 
-        ensemble_models = None
-        parent_model_id = model_info.get('parent_model_id')
-        
-        if parent_model_id:
-            all_models = registry.get_all_models()
-            ensemble_models = {}
+        # 如果前面没有加载集成模型，检查是否需要通过其他方式加载
+        if not ensemble_models:
+            parent_model_id = model_info.get('parent_model_id')
             
-            for m in all_models:
-                if m.get('parent_model_id') == parent_model_id:
-                    sub_model = trainer.load_model(m['file_path'])
-                    ensemble_models[m['model_type']] = sub_model
-            
-            if len(ensemble_models) > 1:
-                print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
-            else:
-                ensemble_models = None
-        elif model_info.get('is_ensemble') or '_ENS_' in model_name or '_ensemble_' in model_name.lower():
-            all_models = registry.get_all_models()
-            ensemble_models = {}
-            
-            parts = model_name.rsplit('_', 2)
-            if len(parts) >= 2:
-                ensemble_prefix = '_'.join(parts[:-2])
-            else:
-                ensemble_prefix = model_name.rsplit('_', 1)[0]
-            
-            for m in all_models:
-                if m.get('parent_model_id') == model_info.get('id'):
-                    sub_model = trainer.load_model(m['file_path'])
-                    ensemble_models[m['model_type']] = sub_model
-                elif m['model_name'].startswith(ensemble_prefix + '_'):
-                    sub_model = trainer.load_model(m['file_path'])
-                    ensemble_models[m['model_type']] = sub_model
-            
-            if len(ensemble_models) > 1:
-                print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
-            else:
-                ensemble_models = None
+            if parent_model_id:
+                all_models = registry.get_all_models()
+                ensemble_models = {}
+                
+                for m in all_models:
+                    if m.get('parent_model_id') == parent_model_id:
+                        sub_model = trainer.load_model(m['file_path'])
+                        ensemble_models[m['model_type']] = sub_model
+                
+                if len(ensemble_models) > 1:
+                    print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+                else:
+                    ensemble_models = None
+            elif '_ENS_' in model_name or '_ensemble_' in model_name.lower():
+                all_models = registry.get_all_models()
+                ensemble_models = {}
+                
+                parts = model_name.rsplit('_', 2)
+                if len(parts) >= 2:
+                    ensemble_prefix = '_'.join(parts[:-2])
+                else:
+                    ensemble_prefix = model_name.rsplit('_', 1)[0]
+                
+                for m in all_models:
+                    if m.get('parent_model_id') == model_info.get('id'):
+                        sub_model = trainer.load_model(m['file_path'])
+                        ensemble_models[m['model_type']] = sub_model
+                    elif m['model_name'].startswith(ensemble_prefix + '_'):
+                        sub_model = trainer.load_model(m['file_path'])
+                        ensemble_models[m['model_type']] = sub_model
+                
+                if len(ensemble_models) > 1:
+                    print(f'[预测] 使用集成模式，加载了 {len(ensemble_models)} 个子模型: {list(ensemble_models.keys())}')
+                else:
+                    ensemble_models = None
 
         from backend.providers import ProviderFactory
         from backend.config import DataSourceConfig
@@ -1203,6 +1225,11 @@ def ml_predict():
             cache_path = cache_config.get('cache_path', './data/factor_cache/')
             raw_data_path = cache_config.get('raw_data_path', './data/')
             factor_library = cache_config.get('factor_library', 'alpha191')
+            # 转换为绝对路径
+            if not os.path.isabs(cache_path):
+                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
+            if not os.path.isabs(raw_data_path):
+                raw_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_data_path))
             provider = ProviderFactory.create_provider(
                 'factor_cache',
                 cache_path=cache_path,
@@ -1433,6 +1460,17 @@ def ml_predict_advanced():
             cache_path = cache_config.get('cache_path', './data/factor_cache/')
             raw_data_path = cache_config.get('raw_data_path', './data/')
             factor_library = cache_config.get('factor_library', 'alpha191')
+            # 转换为绝对路径
+            if not os.path.isabs(cache_path):
+                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
+            if not os.path.isabs(raw_data_path):
+                raw_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_data_path))
+            # 写入调试文件（使用绝对路径）
+            debug_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'debug_factor_cache.txt'))
+            import sys
+            with open(debug_path, 'a') as f:
+                f.write(f"cwd: {os.getcwd()}, cache_path: {cache_path}, exists: {os.path.exists(cache_path)}\n")
+                f.write(f"sys.executable: {sys.executable}\n")
             provider = ProviderFactory.create_provider(
                 'factor_cache',
                 cache_path=cache_path,
@@ -1645,6 +1683,8 @@ def ml_delete_advanced_prediction(task_id):
 @app.route('/api/ml/predict/advanced/<task_id>/download/<file_key>', methods=['GET'])
 def ml_download_prediction_file(task_id, file_key):
     """下载预测结果Excel文件"""
+    import glob
+    
     try:
         from backend.advanced_predictor import get_task_predictor
         predictor = get_task_predictor(task_id)
@@ -1653,15 +1693,31 @@ def ml_download_prediction_file(task_id, file_key):
             predictor = get_advanced_predictor()
         task = predictor.get_task(task_id)
 
-        if not task:
-            return jsonify({'error': '任务不存在'}), 404
+        filepath = None
+        
+        if task and task.export_files and file_key in task.export_files:
+            filepath = task.export_files[file_key]
+        else:
+            export_dir = os.path.join(os.path.dirname(__file__), '..', 'exports')
+            if os.path.exists(export_dir):
+                if file_key == 'fused':
+                    pattern = os.path.join(export_dir, f'*FUSED*{task_id}*.xlsx')
+                else:
+                    pattern = os.path.join(export_dir, f'*{file_key}*.xlsx')
+                
+                files = glob.glob(pattern)
+                if files:
+                    filepath = files[0]
+                else:
+                    all_files = glob.glob(os.path.join(export_dir, '*.xlsx'))
+                    for f in all_files:
+                        basename = os.path.basename(f)
+                        if task_id in basename and file_key in basename:
+                            filepath = f
+                            break
 
-        if file_key not in task.export_files:
-            return jsonify({'error': '文件不存在'}), 404
-
-        filepath = task.export_files[file_key]
-        if not os.path.exists(filepath):
-            return jsonify({'error': '文件已被删除'}), 404
+        if not filepath or not os.path.exists(filepath):
+            return jsonify({'error': '文件不存在或已被删除'}), 404
 
         filename = os.path.basename(filepath)
         return send_file(
@@ -1669,6 +1725,66 @@ def ml_download_prediction_file(task_id, file_key):
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True,
             download_name=filename
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/advanced/<task_id>/download_all', methods=['GET'])
+def ml_download_all_advanced_prediction(task_id):
+    """打包下载所有选股结果文件"""
+    import zipfile
+    import io
+    import glob
+    
+    try:
+        from backend.advanced_predictor import get_task_predictor
+        predictor = get_task_predictor(task_id)
+        if not predictor:
+            from backend.advanced_predictor import get_advanced_predictor
+            predictor = get_advanced_predictor()
+        task = predictor.get_task(task_id)
+
+        export_files = {}
+        
+        if task and task.export_files:
+            export_files = task.export_files
+        else:
+            export_dir = os.path.join(os.path.dirname(__file__), '..', 'exports')
+            if os.path.exists(export_dir):
+                pattern = os.path.join(export_dir, f'*{task_id}*.xlsx')
+                files = glob.glob(pattern)
+                if not files:
+                    all_files = glob.glob(os.path.join(export_dir, '*.xlsx'))
+                    files = [f for f in all_files if task_id in os.path.basename(f)]
+                
+                for filepath in files:
+                    filename = os.path.basename(filepath)
+                    key = filename.replace('.xlsx', '')
+                    export_files[key] = filepath
+
+        if not export_files:
+            return jsonify({'error': '没有可下载的文件，任务可能已过期或不存在'}), 404
+
+        memory_file = io.BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for key, filepath in export_files.items():
+                if os.path.exists(filepath):
+                    filename = os.path.basename(filepath)
+                    zf.write(filepath, filename)
+        
+        memory_file.seek(0)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        zip_filename = f"stock_picking_{task_id}_{timestamp}.zip"
+        
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=zip_filename
         )
 
     except Exception as e:
