@@ -344,7 +344,7 @@ class AStockBacktestEngine:
         }
 
     def save_chart_image(self, task_id=None, width=16, height=9):
-        project_root = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         results_dir = os.path.join(project_root, 'results')
         os.makedirs(results_dir, exist_ok=True)
         filename = f'backtest_{task_id or uuid.uuid4().hex[:8]}.png'

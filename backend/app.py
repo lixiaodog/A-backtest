@@ -31,7 +31,7 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 def scan_strategies():
-    strategies_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'strategies')
+    strategies_dir = os.path.join(os.path.dirname(__file__), 'strategies')
     strategies = []
     _strategy_mtimes = getattr(scan_strategies, '_mtimes', {})
 
