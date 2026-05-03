@@ -19,6 +19,7 @@ function MLPanel() {
   const [technicalFeatures, setTechnicalFeatures] = useState([])
   const [alphaFeatures, setAlphaFeatures] = useState([])
   const [selectedFeatures, setSelectedFeatures] = useState([])
+  const [selectedBaseModel, setSelectedBaseModel] = useState(null)
   const [featureType, setFeatureType] = useState('all')
   const [predictionResult, setPredictionResult] = useState(null)
 
@@ -174,7 +175,9 @@ function MLPanel() {
 
   const handleTabChange = (key) => {
     setActiveTab(key)
-    if (key === '3') {
+    if (key === '2') {
+      loadModels()
+    } else if (key === '3') {
       loadModels()
     } else if (key === '5') {
       loadModels()
@@ -360,13 +363,24 @@ function MLPanel() {
   }
 
   const handleIncrementalTrain = async (values) => {
-    if (selectedFeatures.length === 0) {
-      message.error('请至少选择一个特征')
-      return
-    }
     const modelId = values.base_model
     if (!modelId) {
       message.error('请选择基座模型')
+      return
+    }
+
+    if (selectedBaseModel?.scaler_params) {
+      message.error('该模型使用了归一化，不支持增量训练')
+      return
+    }
+
+    let stockList = values.stocks || []
+    if (stockList.includes('__SELECT_ALL__')) {
+      stockList = stocks || []
+    }
+    
+    if (stockList.length === 0) {
+      message.error('请选择至少一只股票')
       return
     }
 
@@ -374,16 +388,24 @@ function MLPanel() {
 
     try {
       const res = await axios.post('http://localhost:5000/api/ml/train/incremental', {
-        stock: values.stock,
-        end_date: values.endDate ? dayjs(values.endDate).format('YYYYMMDD') : '',
-        features: selectedFeatures,
-        model_id: modelId
+        base_model_id: modelId,
+        new_start_date: values.new_start_date ? dayjs(values.new_start_date).format('YYYYMMDD') : '',
+        new_end_date: values.new_end_date ? dayjs(values.new_end_date).format('YYYYMMDD') : '',
+        market: values.market || 'SZ',
+        period: values.period || '1d',
+        stocks: stockList,
+        data_source: values.data_source || 'factor_cache'
       })
 
-      message.success('增量训练完成!')
-      loadModels()
+      if (res.data.error) {
+        message.error(res.data.error)
+      } else {
+        message.success('增量训练已启动!')
+        loadModels()
+      }
     } catch (err) {
-      message.error('增量训练失败')
+      const errorMsg = err.response?.data?.error || '增量训练失败'
+      message.error(errorMsg)
     } finally {
       setLoading(false)
     }
@@ -1333,6 +1355,7 @@ function MLPanel() {
                     <Select>
                       <Option value="csv">CSV文件（实时计算）</Option>
                       <Option value="cache">缓存数据</Option>
+                      <Option value="factor_cache">因子缓存</Option>
                     </Select>
                   </Form.Item>
                 </Col>
@@ -1356,7 +1379,7 @@ function MLPanel() {
               <Row gutter={16}>
                 <Col span={6}>
                   <Form.Item name="modelType" label="基础模型" style={{ marginBottom: 8 }}>
-                    <Select disabled={useEnsemble}>
+                    <Select disabled={useEnsemble || selectedBaseModel}>
                       <Option value="RandomForest">RandomForest</Option>
                       <Option value="LightGBM">LightGBM</Option>
                     </Select>
@@ -1364,7 +1387,7 @@ function MLPanel() {
                 </Col>
                 <Col span={4}>
                   <Form.Item name="useEnsemble" label="集成" valuePropName="checked" style={{ marginBottom: 8 }}>
-                    <Switch />
+                    <Switch disabled={selectedBaseModel} />
                   </Form.Item>
                 </Col>
                 <Col span={4}>
@@ -1395,7 +1418,7 @@ function MLPanel() {
                 </Col>
                 <Col span={8}>
                   <Form.Item name="normalize" label="特征归一化" initialValue={false} valuePropName="checked" style={{ marginBottom: 8 }}>
-                    <Switch />
+                    <Switch disabled={selectedBaseModel} />
                   </Form.Item>
                 </Col>
               </Row>
@@ -1403,7 +1426,7 @@ function MLPanel() {
               <Row gutter={16}>
                 <Col span={12}>
                   <Form.Item name="mode" label="训练模式" initialValue="classification" style={{ marginBottom: 8 }}>
-                    <Select>
+                    <Select disabled={selectedBaseModel}>
                       <Option value="classification">分类</Option>
                       <Option value="regression">回归</Option>
                     </Select>
@@ -1411,12 +1434,12 @@ function MLPanel() {
                 </Col>
                 <Col span={12}>
                   <Form.Item name="horizon" label="预测天数" initialValue={5} style={{ marginBottom: 8 }}>
-                    <Input type="number" min={1} max={60} />
+                    <Input type="number" min={1} max={60} disabled={selectedBaseModel} />
                   </Form.Item>
                 </Col>
               </Row>
 
-              {watchMode !== 'regression' && (
+              {watchMode !== 'regression' && !selectedBaseModel && (
               <Row gutter={16}>
                 <Col span={8}>
                   <Form.Item name="labelType" label="分类标签" initialValue="fixed" style={{ marginBottom: 8 }}>
@@ -1564,17 +1587,80 @@ function MLPanel() {
             <Form layout="vertical" onFinish={handleIncrementalTrain}>
             <Space direction="vertical" style={{ width: '100%' }}>
               <Form.Item name="base_model" label="基座模型" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
-                <Select placeholder="选择基座模型">
-                  {Array.isArray(models) && models.filter(m => !m.is_ensemble).map(m => (
+                <Select placeholder="选择基座模型" onChange={(val) => {
+                  const allModels = [...models, ...Object.values(ensembleGroups).flat()]
+                  const selectedModel = allModels.find(m => m.id === val)
+                  setSelectedBaseModel(selectedModel)
+                }}>
+                  {Array.isArray(models) && models.map(m => (
                     <Select.Option key={m.id} value={m.id}>
                       {m.model_name || m.stock} [{m.model_type || ''}]
                     </Select.Option>
                   ))}
+                  {Object.entries(ensembleGroups).map(([groupId, groupModels]) => (
+                    groupModels.map(m => (
+                      <Select.Option key={m.id} value={m.id}>
+                        {m.model_name} [{m.model_type}]
+                      </Select.Option>
+                    ))
+                  ))}
                 </Select>
               </Form.Item>
 
-              <Form.Item name="stock" label="股票" rules={[{ required: true }]} style={{ marginBottom: 0 }}>
-                <Select showSearch allowClear placeholder="选择股票">
+              {selectedBaseModel && (
+                <Card size="small" style={{ marginBottom: 8, backgroundColor: '#1a1a1a' }}>
+                  <Space direction="vertical" size="small">
+                    <div>
+                      <Tag color={selectedBaseModel.scaler_params ? 'red' : 'green'}>
+                        {selectedBaseModel.scaler_params ? '已归一化(不支持增量)' : '未归一化(支持增量)'}
+                      </Tag>
+                    </div>
+                    <div style={{ color: '#888' }}>
+                      特征数: {selectedBaseModel.feature_count || selectedBaseModel.features?.length || 0} | 
+                      预测天数: {selectedBaseModel.horizon || 5} | 
+                      模式: {selectedBaseModel.mode || 'regression'}
+                    </div>
+                  </Space>
+                </Card>
+              )}
+
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item name="market" label="市场" initialValue="SZ" style={{ marginBottom: 8 }}>
+                    <Select onChange={(val) => {
+                      setSelectedMarket(val);
+                      form.setFieldsValue({ stocks: [] });
+                      loadStocks(val, selectedPeriod);
+                    }}>
+                      <Select.Option value="SZ">深圳(SZ)</Select.Option>
+                      <Select.Option value="SH">上海(SH)</Select.Option>
+                      <Select.Option value="BJ">北京(BJ)</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="period" label="周期" initialValue="1d" style={{ marginBottom: 8 }}>
+                    <Select onChange={(val) => {
+                      setSelectedPeriod(val);
+                      form.setFieldsValue({ stocks: [] });
+                      loadStocks(selectedMarket, val);
+                    }}>
+                      <Select.Option value="1d">日线</Select.Option>
+                      <Select.Option value="1w">周线</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Form.Item name="stocks" label="股票" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
+                <Select
+                  mode="multiple"
+                  showSearch
+                  allowClear
+                  placeholder="选择股票（支持多选）"
+                  maxTagCount={5}
+                >
+                  <Select.Option key="select_all" value="__SELECT_ALL__">全选</Select.Option>
                   {(stocks || []).map(s => (
                     <Select.Option key={s} value={s}>{s}</Select.Option>
                   ))}
@@ -1582,43 +1668,45 @@ function MLPanel() {
               </Form.Item>
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <Form.Item name="startDate" style={{ flex: 1, marginBottom: 0 }}>
-                  <DatePicker placeholder="新增数据开始" format="YYYYMMDD" />
+                <Form.Item name="new_start_date" label="新数据开始日期" style={{ flex: 1, marginBottom: 0 }}>
+                  <DatePicker placeholder="开始日期" format="YYYYMMDD" style={{ width: '100%' }} />
                 </Form.Item>
-                <Form.Item name="endDate" style={{ flex: 1, marginBottom: 0 }}>
-                  <DatePicker placeholder="新增数据结束" format="YYYYMMDD" />
+                <Form.Item name="new_end_date" label="新数据结束日期" style={{ flex: 1, marginBottom: 0 }}>
+                  <DatePicker placeholder="结束日期" format="YYYYMMDD" style={{ width: '100%' }} />
                 </Form.Item>
               </div>
 
-              <div>
-                <div style={{ marginBottom: 8, color: '#888' }}>特征类型</div>
-                <Space>
-                  <Button.Group>
-                    <Button type={featureType === 'all' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('all')}>全部</Button>
-                    <Button type={featureType === 'technical' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('technical')}>技术指标</Button>
-                    <Button type={featureType === 'alpha191' ? 'primary' : 'default'} onClick={() => handleFeatureTypeChange('alpha191')}>Alpha191</Button>
-                  </Button.Group>
-                </Space>
-              </div>
-
-              <Form.Item name="features" label={`特征 (${selectedFeatures.length})`} style={{ marginBottom: 8 }}>
-                <Checkbox.Group value={selectedFeatures} onChange={(vals) => {
-                  setSelectedFeatures(vals)
-                  form.setFieldsValue({ features: vals })
-                }}>
-                  <div style={{ maxHeight: 100, overflow: 'auto', border: '1px solid #333', borderRadius: 4, padding: 8 }}>
-                    {currentFeatures.map(f => (
-                      <Checkbox key={f} value={f} style={{ width: '45%', marginLeft: 4 }}>{f}</Checkbox>
-                    ))}
-                  </div>
-                </Checkbox.Group>
+              <Form.Item name="data_source" label="数据源" initialValue="factor_cache" style={{ marginBottom: 8 }}>
+                <Select>
+                  <Select.Option value="factor_cache">因子缓存 (本地缓存)</Select.Option>
+                </Select>
               </Form.Item>
 
-              <Button type="primary" htmlType="submit" icon={<CloudUploadOutlined />} loading={loading} style={{ width: '100%' }}>
-                增量训练
+              <Button 
+                type="primary" 
+                htmlType="submit" 
+                icon={<CloudUploadOutlined />} 
+                loading={loading} 
+                style={{ width: '100%' }}
+                disabled={selectedBaseModel?.scaler_params}
+              >
+                {selectedBaseModel?.scaler_params ? '该模型不支持增量训练(已归一化)' : '开始增量训练'}
               </Button>
             </Space>
           </Form>
+          </Card>
+
+          {/* 增量训练任务列表 */}
+          <Card title="增量训练任务" style={{ marginTop: 16 }}>
+            <Table 
+              columns={taskColumns} 
+              dataSource={trainingTasks.filter(t => t.base_model_id || t.incremental)} 
+              rowKey="task_id"
+              pagination={{ pageSize: 10 }}
+              size="small"
+              locale={{ emptyText: '暂无增量训练任务' }}
+              scroll={{ x: 1200 }}
+            />
           </Card>
         </Tabs.TabPane>
 
@@ -1626,7 +1714,7 @@ function MLPanel() {
           <Card>
             <Form layout="vertical" onFinish={handlePredict}>
             <Space direction="vertical" style={{ width: '100%' }}>
-              <Form.Item name="data_source" label="数据源" initialValue="akshare" style={{ marginBottom: 8 }}>
+              <Form.Item name="data_source" label="数据源" initialValue="factor_cache" style={{ marginBottom: 8 }}>
                 <Select>
                   <Select.Option value="akshare">AKShare (实时数据)</Select.Option>
                   <Select.Option value="factor_cache">因子缓存 (本地缓存)</Select.Option>
@@ -1784,8 +1872,8 @@ function MLPanel() {
                   </Select>
                 </Form.Item>
 
-                <Form.Item name="predict_date" label="预测日期" tooltip="留空则使用最新数据">
-                  <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" defaultValue={dayjs()} />
+                <Form.Item name="predict_date" label="预测日期" tooltip="留空则使用最新数据" initialValue={dayjs()}>
+                  <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" />
                 </Form.Item>
 
                 <Button

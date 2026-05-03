@@ -75,6 +75,7 @@ class TrainingPipeline:
 
     def thread1_data_loader(self):
         _log(f'[数据加载] 开始加载 {len(self.stock_list)} 只股票的数据')
+        min_data_count = self.horizon + 1 if self.data_source in ['cache', 'factor_cache'] else 100
         for idx, stock_code in enumerate(self.stock_list):
             if self.is_stopped():
                 _log('[数据加载] 收到停止信号，退出', 'WARN')
@@ -86,8 +87,8 @@ class TrainingPipeline:
                     period=self.period, market=self.market
                 )
 
-                if len(raw_data) < 100:
-                    _log(f'[数据加载] {stock_code} 原始数据量太少({len(raw_data)}条)，跳过', 'WARN')
+                if len(raw_data) < min_data_count:
+                    _log(f'[数据加载] {stock_code} 原始数据量太少({len(raw_data)}条)，需要至少{min_data_count}条，跳过', 'WARN')
                     continue
 
                 self.raw_queue.put((stock_code, raw_data), timeout=30)
@@ -126,8 +127,9 @@ class TrainingPipeline:
                 else:
                     X, y = feature_engineer.prepare_data(raw_data, self.features, self.horizon, self.threshold, normalize=False, stock_code=stock_code, data_source=self.data_source)
 
-                if len(X) < 50:
-                    _log(f'[特征生成-{worker_id}] {stock_code} 特征数据量太少({len(X)}条)，跳过', 'WARN')
+                min_feature_count = 1 if self.data_source in ['cache', 'factor_cache'] else 50
+                if len(X) < min_feature_count:
+                    _log(f'[特征生成-{worker_id}] {stock_code} 特征数据量太少({len(X)}条)，需要至少{min_feature_count}条，跳过', 'WARN')
                     self.raw_queue.task_done()
                     continue
 

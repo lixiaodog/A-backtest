@@ -7,6 +7,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from backend.ml.model_naming import generate_model_name
+
 def _process_single_stock(args):
     stock_code, params = args
     try:
@@ -218,10 +220,8 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
                 'message': '正在保存子模型'}
 
         import uuid
-        model_id = str(uuid.uuid4())[:8]
-        parent_id = str(uuid.uuid4())
+        parent_id = str(uuid.uuid4())[:8]
         stock_display = f'{len(stock_sample_counts)}只股票'
-        base_name = model_name or f'{params["market"]}_{params["period"]}_ENS_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{label_short}_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks'
         trained_models = []
         for i, model_key in enumerate(result['models'].keys()):
             if task_id and training_tasks:
@@ -229,7 +229,21 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
                     'message': f'正在保存 {model_key} ({i+1}/{len(result["models"])})'}
             print(f'[多进程训练] 任务ID: {task_id} - 保存 {model_key} ({i+1}/{len(result["models"])})')
             model_obj = result['models'][model_key]
-            sub_filename = f'{base_name}_{model_key}_{model_id}_{i}.pkl'
+            sub_filename = generate_model_name(
+                market=params['market'],
+                period=params['period'],
+                model_type=model_key,
+                end_date=params['end_date'],
+                feature_count=len(features),
+                horizon=params['horizon'],
+                label_type=label_type,
+                threshold=params['threshold'],
+                vol_window=params['vol_window'],
+                stock_count=len(stock_sample_counts),
+                is_ensemble=True,
+                ensemble_id=parent_id,
+                ensemble_index=i
+            ) + '.pkl'
             sub_filepath = trainer.save_model(model_obj, sub_filename)
             sub_metric = result['test_metrics'].get(model_key, {})
             sub_model_info = registry.register_model(
@@ -268,16 +282,25 @@ def parallel_train(stock_list, params, task_id=None, training_tasks=None):
         if task_id and training_tasks:
             training_tasks[task_id] = {'progress': 80, 'status': 'running', 'message': '正在保存模型'}
 
-        import uuid
-        model_id = str(uuid.uuid4())[:8]
         stock_display = f'{len(stock_sample_counts)}只股票'
-        if not model_name:
-            if mode == 'regression':
-                main_metric = result['test_metrics']['r2']
-            else:
-                main_metric = result['test_metrics']['accuracy']
-            model_name = f'{params["market"]}_{params["period"]}_{model_type}_{params["end_date"]}_{len(features)}f_{params["horizon"]}h_{label_short}_{params["threshold"]}t_{params["vol_window"]}v_{total_stocks}stocks_{main_metric:.2f}'
-            model_name = f'{model_name}_{model_id}'
+        if mode == 'regression':
+            main_metric = result['test_metrics']['r2']
+        else:
+            main_metric = result['test_metrics']['accuracy']
+        
+        model_name = generate_model_name(
+            market=params['market'],
+            period=params['period'],
+            model_type=model_type,
+            end_date=params['end_date'],
+            feature_count=len(features),
+            horizon=params['horizon'],
+            label_type=label_type,
+            threshold=params['threshold'],
+            vol_window=params['vol_window'],
+            stock_count=len(stock_sample_counts),
+            metric=main_metric
+        )
 
         filename = f'{model_name}.pkl'
         filepath = trainer.save_model(result['model'], filename)

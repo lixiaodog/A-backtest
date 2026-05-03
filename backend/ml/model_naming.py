@@ -45,13 +45,13 @@ def generate_model_name(
         'regression': 'reg'
     }.get(label_type, label_type[:3])
 
-    base = f'{market.upper()}_{period.upper()}_{model_type}_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}'
+    base = f'{market.upper()}_{period.upper()}_{model_type}_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}stocks'
 
     if metric is not None:
         base = f'{base}_{metric:.2f}'
 
     if is_ensemble and ensemble_id:
-        base = f'{market.upper()}_{period.upper()}_ENS_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}_{ensemble_id}_{model_type}_{ensemble_index}'
+        base = f'{market.upper()}_{period.upper()}_ENS_{end_date}_{feature_count}f_{horizon}h_{label_short}_{threshold}t_{vol_window}v_{stock_count}stocks_{ensemble_id}_{model_type}_{ensemble_index}'
     elif ensemble_id:
         base = f'{base}_{ensemble_id}'
 
@@ -77,6 +77,9 @@ def parse_model_name(name: str) -> dict:
             'reg': 'regression'
         }.get(label_short, label_short)
 
+        stock_count_str = parts[9].replace('stocks', '')
+        stock_count = int(stock_count_str) if stock_count_str.isdigit() else 0
+
         result = {
             'market': parts[0],
             'period': parts[1],
@@ -87,20 +90,24 @@ def parse_model_name(name: str) -> dict:
             'label_type': label_type,
             'threshold': float(parts[7].replace('t', '')),
             'vol_window': int(parts[8].replace('v', '')),
-            'stock_count': int(parts[9]),
+            'stock_count': stock_count,
         }
 
         if result['model_type'] == 'ENS':
             result['is_ensemble'] = True
             if len(parts) >= 12:
-                result['ensemble_id'] = parts[11]
+                result['ensemble_id'] = parts[10]
                 if len(parts) >= 13:
-                    result['model_type'] = parts[12]
+                    result['model_type'] = parts[11]
                     if len(parts) >= 14:
-                        result['ensemble_index'] = int(parts[13])
+                        try:
+                            result['ensemble_index'] = int(parts[12])
+                        except ValueError:
+                            pass
         elif len(parts) >= 11:
-            if parts[10].replace('.', '').isdigit():
-                result['metric'] = float(parts[10])
+            metric_str = parts[10].replace('stocks', '')
+            if metric_str and metric_str.replace('.', '').isdigit():
+                result['metric'] = float(metric_str)
 
         return result
     except (ValueError, IndexError):

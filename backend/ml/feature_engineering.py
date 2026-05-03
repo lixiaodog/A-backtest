@@ -148,7 +148,7 @@ class FeatureEngineer:
         print(f'[特征工程] 计算技术指标: {len(technical_features)} 个, 数据源: {data_source}')
         sys.stdout.flush()
 
-        use_cache_mode = (data_source == 'cache')
+        use_cache_mode = (data_source in ['cache', 'factor_cache'])
         
         if stock_code:
             strict_mode = use_cache_mode

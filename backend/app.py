@@ -140,6 +140,7 @@ training_tasks = {}
 training_threads = {}
 task_queue = []
 queue_running = False
+incremental_tasks = {}
 
 backtest_tasks = tasks
 
@@ -1037,72 +1038,311 @@ def ml_train_incremental():
         base_model_id = data.get('base_model_id') or data.get('base_model')
         new_start_date = data.get('new_start_date')
         new_end_date = data.get('new_end_date')
+        stock_list = data.get('stocks', [])
+        market = data.get('market', 'SZ')
+        period = data.get('period', '1d')
+        data_source = data.get('data_source', 'factor_cache')
+        use_gpu = data.get('use_gpu', False)
+        fast_mode = data.get('fast_mode', False)
 
         from backend.ml import MLDataLoader, FeatureEngineer, ModelTrainer, ModelRegistry
+        from backend.pipeline import TrainingPipeline
+        from backend.ml.model_naming import generate_model_name
 
         registry = ModelRegistry()
         base_model_info = registry.get_model_by_id(base_model_id)
+        
+        if not base_model_info:
+            base_model_info = registry.get_model_by_parent_id(base_model_id)
+        
         if not base_model_info:
             return jsonify({'error': '基础模型不存在'}), 404
 
-        data_loader = MLDataLoader()
-        feature_engineer = FeatureEngineer()
-        trainer = ModelTrainer()
+        # 检查归一化状态
+        if base_model_info.get('scaler_params'):
+            return jsonify({
+                'error': '该模型使用了归一化，不支持增量训练',
+                'reason': '归一化参数基于训练数据计算，增量训练会导致参数不一致',
+                'suggestion': '请使用未归一化的模型进行增量训练'
+            }), 400
 
-        raw_data = data_loader.load_stock_data(
-            base_model_info['stock_code'],
-            new_start_date,
-            new_end_date
-        )
+        # 检查集成模型的子模型
+        is_ensemble = base_model_info.get('is_ensemble', False)
+        if is_ensemble:
+            sub_models = base_model_info.get('sub_models', [])
+            for sub in sub_models:
+                sub_info = registry.get_model_by_id(sub['id'])
+                if sub_info and sub_info.get('scaler_params'):
+                    return jsonify({
+                        'error': f'子模型 {sub["model_type"]} 使用了归一化，不支持增量训练',
+                        'suggestion': '请使用未归一化的模型进行增量训练'
+                    }), 400
 
-        X, y = feature_engineer.prepare_data(
-            raw_data,
-            base_model_info['features'],
-            base_model_info.get('horizon', 5),
-            base_model_info.get('threshold', 0.02)
-        )
+        # 继承基座模型参数
+        features = base_model_info.get('features', [])
+        horizon = base_model_info.get('horizon', 5)
+        threshold = base_model_info.get('threshold', 0.02)
+        vol_window = base_model_info.get('vol_window', 20)
+        lower_q = base_model_info.get('lower_q', 0.2)
+        upper_q = base_model_info.get('upper_q', 0.8)
+        mode = base_model_info.get('mode', 'regression')
+        label_type = base_model_info.get('label_type', 'fixed')
+        model_type = base_model_info.get('model_type', 'RandomForest')
 
-        mode = base_model_info.get('mode', 'classification')
+        # 确定prepare_func
+        if mode == 'regression':
+            prepare_func = 'prepare_data_regression'
+        elif label_type == 'volatility':
+            prepare_func = 'prepare_data_with_volatility'
+        elif label_type == 'multi':
+            prepare_func = 'prepare_data_multi'
+        else:
+            prepare_func = 'prepare_data'
 
-        new_model = trainer.train_incremental(
-            base_model_info['file_path'],
-            X, y,
-            base_model_info['model_type'],
-            mode=mode
-        )
-
-        filename = f'{base_model_info["model_type"].lower()}_{base_model_info["stock_code"]}_inc_{uuid.uuid4().hex[:8]}.pkl'
-        filepath = trainer.save_model(new_model, filename)
-
-        new_incremental_info = {
-            'start_date': new_start_date,
-            'end_date': new_end_date,
-            'trained_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 创建任务ID
+        task_id = str(uuid.uuid4())[:8]
+        
+        # 初始化进度跟踪
+        incremental_tasks[task_id] = {
+            'progress': 0,
+            'status': 'running',
+            'message': '初始化增量训练...',
+            'base_model_id': base_model_id
         }
 
-        model_info = registry.register_model(
-            stock_code=base_model_info['stock_code'],
-            start_date=base_model_info['start_date'],
+        # 如果前端提供了股票列表，使用它；否则根据市场获取股票列表
+        if not stock_list:
+            import glob
+            cache_path = './data/factor_cache/'
+            if not os.path.isabs(cache_path):
+                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
+            
+            db_files = glob.glob(os.path.join(cache_path, '*.db'))
+            
+            # 根据市场筛选股票
+            if market == 'SH':
+                stock_list = [os.path.basename(f).replace('.db', '') for f in db_files if os.path.basename(f).replace('.db', '').startswith('6')]
+            elif market == 'BJ':
+                stock_list = [os.path.basename(f).replace('.db', '') for f in db_files if os.path.basename(f).replace('.db', '').startswith(('4', '8'))]
+            else:  # SZ
+                stock_list = [os.path.basename(f).replace('.db', '') for f in db_files if os.path.basename(f).replace('.db', '').startswith(('0', '3'))]
+        
+        print(f'[增量训练] 市场: {market}, 股票数量: {len(stock_list)}')
+
+        total_stocks = len(stock_list)
+        stock_display = f'{total_stocks}只股票'
+
+        pipeline = TrainingPipeline(
+            stock_list=stock_list,
+            task_id=task_id,
+            prepare_func=prepare_func,
+            features=features,
+            horizon=horizon,
+            threshold=threshold,
+            vol_window=vol_window,
+            lower_q=lower_q,
+            upper_q=upper_q,
+            start_date=new_start_date,
             end_date=new_end_date,
-            model_type=base_model_info['model_type'],
-            features=base_model_info['features'],
-            file_path=filepath,
-            metrics={},
-            parent_model_id=base_model_id,
-            incremental_data=new_incremental_info,
-            scaler_params=base_model_info.get('scaler_params'),
+            period=period,
+            market=market,
             mode=mode,
-            is_ensemble=base_model_info.get('is_ensemble', False)
+            training_tasks=incremental_tasks,
+            progress_offset=5,
+            progress_scale=0.55,
+            data_source=data_source,
+            use_gpu=use_gpu,
+            fast_mode=fast_mode,
+            normalize=False  # 增量训练不使用归一化
         )
+
+        print(f'[增量训练] 开始运行TrainingPipeline, 股票数: {len(stock_list)}, 日期: {new_start_date} ~ {new_end_date}')
+        
+        try:
+            pipeline.run()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            incremental_tasks[task_id] = {
+                'progress': 0,
+                'status': 'failed',
+                'message': f'数据加载失败: {str(e)}'
+            }
+            return jsonify({'error': f'数据加载失败: {str(e)}'}), 400
+
+        pipeline_result = pipeline.training_result
+        print(f'[增量训练] TrainingPipeline完成, 结果: {pipeline_result is not None}')
+
+        if not pipeline_result:
+            incremental_tasks[task_id] = {
+                'progress': 0,
+                'status': 'failed',
+                'message': '没有足够的有效数据'
+            }
+            return jsonify({'error': '没有足够的有效数据'}), 400
+
+        all_X = pipeline_result['all_X']
+        all_y = pipeline_result['all_y']
+        stock_sample_counts = pipeline_result['stock_sample_counts']
+
+        if not all_X:
+            incremental_tasks[task_id] = {
+                'progress': 0,
+                'status': 'failed',
+                'message': '没有足够的有效数据'
+            }
+            return jsonify({'error': '没有足够的有效数据'}), 400
+
+        X = pd.concat(all_X, ignore_index=True)
+        y = pd.concat(all_y, ignore_index=True)
+
+        incremental_tasks[task_id] = {
+            'progress': 65,
+            'status': 'running',
+            'message': f'开始训练，样本数: {len(X)}'
+        }
+
+        # 训练模型
+        trainer = ModelTrainer()
+
+        if not new_end_date:
+            new_end_date = datetime.now().strftime('%Y%m%d')
+
+        if is_ensemble:
+            # 集成模型训练
+            result = trainer.train_ensemble(X, y, mode=mode, use_gpu=use_gpu, fast_mode=fast_mode)
+            
+            incremental_tasks[task_id] = {
+                'progress': 80,
+                'status': 'running',
+                'message': '正在保存子模型...'
+            }
+
+            parent_id = str(uuid.uuid4())[:8]
+            trained_models = []
+            
+            for i, model_key in enumerate(result['models'].keys()):
+                model_obj = result['models'][model_key]
+                sub_filename = generate_model_name(
+                    market=market,
+                    period=period,
+                    model_type=model_key,
+                    end_date=new_end_date,
+                    feature_count=len(features),
+                    horizon=horizon,
+                    label_type=label_type,
+                    threshold=threshold,
+                    vol_window=vol_window,
+                    stock_count=total_stocks,
+                    is_ensemble=True,
+                    ensemble_id=parent_id,
+                    ensemble_index=i
+                ) + '.pkl'
+                
+                sub_filepath = trainer.save_model(model_obj, sub_filename)
+                sub_metric = result['test_metrics'].get(model_key, {})
+                
+                sub_model_info = registry.register_model(
+                    stock_code=stock_display,
+                    model_name=sub_filename.replace('.pkl', ''),
+                    start_date=base_model_info.get('start_date'),
+                    end_date=new_end_date,
+                    model_type=model_key,
+                    features=features,
+                    file_path=sub_filepath,
+                    metrics=sub_metric,
+                    scaler_params=None,
+                    label_type=label_type,
+                    horizon=horizon,
+                    threshold=threshold,
+                    vol_window=vol_window,
+                    lower_q=lower_q,
+                    upper_q=upper_q,
+                    mode=mode,
+                    is_ensemble=False,
+                    parent_model_id=parent_id
+                )
+                trained_models.append(sub_model_info)
+
+            model_info = {
+                'id': parent_id,
+                'model_type': f'集成({", ".join([m["model_type"] for m in trained_models])})',
+                'is_ensemble': True,
+                'sub_models': trained_models,
+                'parent_model_id': base_model_id,
+                'incremental': True
+            }
+        else:
+            # 单模型训练
+            result = trainer.train_with_split(X, y, model_type, mode=mode, use_gpu=use_gpu, fast_mode=fast_mode)
+            
+            model_name = generate_model_name(
+                market=market,
+                period=period,
+                model_type=model_type,
+                end_date=new_end_date,
+                feature_count=len(features),
+                horizon=horizon,
+                label_type=label_type,
+                threshold=threshold,
+                vol_window=vol_window,
+                stock_count=total_stocks
+            )
+
+            filename = f'{model_name}.pkl'
+            filepath = trainer.save_model(result['model'], filename)
+
+            model_info = registry.register_model(
+                stock_code=stock_display,
+                model_name=model_name,
+                start_date=base_model_info.get('start_date'),
+                end_date=new_end_date,
+                model_type=model_type,
+                features=features,
+                file_path=filepath,
+                metrics=result['test_metrics'],
+                scaler_params=None,
+                label_type=label_type,
+                horizon=horizon,
+                threshold=threshold,
+                vol_window=vol_window,
+                lower_q=lower_q,
+                upper_q=upper_q,
+                mode=mode,
+                is_ensemble=False,
+                parent_model_id=base_model_id,
+                incremental=True
+            )
+
+        incremental_tasks[task_id] = {
+            'progress': 100,
+            'status': 'completed',
+            'message': '增量训练完成!'
+        }
 
         return jsonify({
             'status': 'incremental_trained',
+            'task_id': task_id,
             'model': model_info
         })
 
     except Exception as e:
         traceback.print_exc()
+        if 'task_id' in dir():
+            incremental_tasks[task_id] = {
+                'progress': 0,
+                'status': 'failed',
+                'message': str(e)
+            }
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/train/incremental/<task_id>', methods=['GET'])
+def ml_get_incremental_progress(task_id):
+    """获取增量训练进度"""
+    if task_id in incremental_tasks:
+        return jsonify(incremental_tasks[task_id])
+    return jsonify({'progress': 0, 'status': 'not_found'})
 
 @app.route('/api/ml/predict', methods=['POST'])
 def ml_predict():
@@ -1827,9 +2067,27 @@ def ml_get_models():
                 if len(siblings) > 1:
                     model_types = [x.get('model_type', '') for x in siblings]
                     first_sibling = siblings[0]
+                    full_model_name = first_sibling.get('model_name', '')
+                    
+                    # 解析完整模型名称，提取关键信息
+                    # 格式: {市场}_{周期}_ENS_{日期}_{特征数}f_{预测天数}h_{模式}_{阈值}t_{波动窗口}v_{股票数}stocks_{集成ID}_{模型类型}_{索引}
+                    # 显示格式: {市场}_{周期}_ENS_{日期}_{特征数}f_{预测天数}h_{模式}_{阈值}t_{波动窗口}v_{股票数}stocks
+                    if '_ENS_' in full_model_name:
+                        parts = full_model_name.split('_ENS_')
+                        prefix = parts[0]  # {市场}_{周期}
+                        suffix = parts[1] if len(parts) > 1 else ''
+                        # 从suffix中提取到stocks为止的部分
+                        if 'stocks_' in suffix:
+                            display_suffix = suffix.split('stocks_')[0] + 'stocks'
+                        else:
+                            display_suffix = suffix.split('_')[0] if '_' in suffix else suffix
+                        display_name = f"{prefix}_ENS_{display_suffix}"
+                    else:
+                        display_name = full_model_name.rsplit('_', 3)[0] if full_model_name else ''
+                    
                     result_models.append({
                         'id': parent_id,
-                        'model_name': first_sibling.get('model_name', '').rsplit('_', 2)[0],
+                        'model_name': display_name,
                         'model_type': f'集成({", ".join(model_types)})',
                         'stock_code': first_sibling.get('stock_code', ''),
                         'mode': first_sibling.get('mode', 'classification'),
@@ -1837,7 +2095,10 @@ def ml_get_models():
                         'sub_models': [{'id': x.get('id'), 'model_type': x.get('model_type', '')} for x in siblings],
                         'created_at': first_sibling.get('created_at', ''),
                         'features': first_sibling.get('features', []),
-                        'feature_count': len(first_sibling.get('features', []))
+                        'feature_count': len(first_sibling.get('features', [])),
+                        'horizon': first_sibling.get('horizon', 5),
+                        'threshold': first_sibling.get('threshold', 0.02),
+                        'vol_window': first_sibling.get('vol_window', 20)
                     })
                     for sib in siblings:
                         processed_ids.add(sib.get('id'))
@@ -1913,6 +2174,23 @@ def ml_get_train_tasks():
         }
         tasks_list.append(task_data)
     
+    # 添加增量训练任务
+    for task_id, task_info in incremental_tasks.items():
+        task_data = {
+            'task_id': task_id,
+            'status': task_info.get('status', 'unknown'),
+            'progress': task_info.get('progress', 0),
+            'message': task_info.get('message', ''),
+            'start_time': task_info.get('start_time'),
+            'end_time': task_info.get('end_time'),
+            'elapsed_time': task_info.get('elapsed_time'),
+            'base_model_id': task_info.get('base_model_id'),
+            'incremental': True,
+            'type': 'incremental',
+            'params': {}
+        }
+        tasks_list.append(task_data)
+    
     # 按创建时间倒序排列
     tasks_list.sort(key=lambda x: x.get('start_time') or '', reverse=True)
     
@@ -1921,12 +2199,22 @@ def ml_get_train_tasks():
 @app.route('/api/ml/train/tasks/<task_id>', methods=['DELETE'])
 def ml_delete_train_task(task_id):
     """删除训练任务"""
+    # 先检查普通训练任务
     if task_id in training_tasks:
         task = training_tasks[task_id]
         if task.get('status') == 'running':
             return jsonify({'error': '无法删除运行中的任务'}), 400
         del training_tasks[task_id]
         return jsonify({'status': 'deleted', 'task_id': task_id})
+    
+    # 再检查增量训练任务
+    if task_id in incremental_tasks:
+        task = incremental_tasks[task_id]
+        if task.get('status') == 'running':
+            return jsonify({'error': '无法删除运行中的任务'}), 400
+        del incremental_tasks[task_id]
+        return jsonify({'status': 'deleted', 'task_id': task_id})
+    
     return jsonify({'error': '任务不存在'}), 404
 
 @app.route('/api/ml/features', methods=['GET'])
