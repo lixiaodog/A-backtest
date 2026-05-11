@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Form, DatePicker, Select, Button, Card, Checkbox, Progress, Table, Tag, Tabs, Space, message, Input, Switch, List, Divider, Modal, Descriptions, Alert, Statistic, Row, Col, Tooltip, TreeSelect, Slider } from 'antd'
-import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, StopOutlined, PlusOutlined, ClearOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, PauseCircleOutlined, SettingOutlined } from '@ant-design/icons'
+import { RobotOutlined, DeleteOutlined, PlayCircleOutlined, CloudUploadOutlined, StopOutlined, PlusOutlined, ClearOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, PauseCircleOutlined, SettingOutlined, FilterOutlined } from '@ant-design/icons'
 import axios from 'axios'
 import dayjs from 'dayjs'
+import StockFilterManager from './StockFilterManager'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -49,6 +50,8 @@ function MLPanel() {
   const [evaluateModelId, setEvaluateModelId] = useState(null)
   const [evaluateHorizon, setEvaluateHorizon] = useState(null)
   const [evaluateLoading, setEvaluateLoading] = useState(false)
+  const [filterSummary, setFilterSummary] = useState({ total: 0, pre: 0, post: 0, loading: true })
+  const [filterModalVisible, setFilterModalVisible] = useState(false)
 
   const [form] = Form.useForm()
   const useEnsemble = Form.useWatch('useEnsemble', form)
@@ -89,12 +92,33 @@ function MLPanel() {
     loadPeriods()
     loadStocks()
     fetchTrainingTasks()
+    loadFilterSummary()
   }, [fetchTrainingTasks])
 
   useEffect(() => {
     startAutoRefresh()
     return () => stopAutoRefresh()
   }, [startAutoRefresh, stopAutoRefresh])
+
+  const loadFilterSummary = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/stock-filters')
+      const filters = res.data.filters || []
+      const enabledFilters = filters.filter(f => f.enabled)
+      const preFilters = enabledFilters.filter(f => f.filter_stage === 'pre_filter')
+      const postFilters = enabledFilters.filter(f => f.filter_stage === 'post_filter')
+      
+      setFilterSummary({
+        total: enabledFilters.length,
+        pre: preFilters.length,
+        post: postFilters.length,
+        loading: false
+      })
+    } catch (err) {
+      console.error('Failed to load filter summary:', err)
+      setFilterSummary({ total: 0, pre: 0, post: 0, loading: false, error: true })
+    }
+  }
 
   const loadMarkets = async () => {
     try {
@@ -470,11 +494,7 @@ function MLPanel() {
 
   // 选股处理函数
   const handleAdvancedPredict = async (values) => {
-    if (!values.model_ids || values.model_ids.length === 0) {
-      message.error('请至少选择一个模型')
-      return
-    }
-
+    // 允许不选择模型，仅使用选股条件筛选
     setAdvancedPredictLoading(true)
     setAdvancedPredictProgress(0)
     setAdvancedPredictResults(null)
@@ -1809,8 +1829,8 @@ function MLPanel() {
                   }}
                 </Form.Item>
 
-                <Form.Item name="model_ids" label="选择模型" rules={[{ required: true }]}>
-                  <Select mode="multiple" placeholder="选择多个模型">
+                <Form.Item name="model_ids" label="选择模型" tooltip="不选择模型则仅使用选股条件筛选">
+                  <Select mode="multiple" placeholder="选择多个模型（可选，不选则仅使用条件筛选）" allowClear>
                     {Object.entries(ensembleGroups).map(([parentId, group]) => {
                       const m = group[0]
                       return (
@@ -1850,7 +1870,7 @@ function MLPanel() {
                 <Row gutter={8}>
                   <Col span={12}>
                     <Form.Item name="top_n" label="结果数量" initialValue={100}>
-                      <Input type="number" min={1} max={1000} />
+                      <Input type="number" min={1} />
                     </Form.Item>
                   </Col>
                   <Col span={12}>
@@ -1875,6 +1895,33 @@ function MLPanel() {
                 <Form.Item name="predict_date" label="预测日期" tooltip="留空则使用最新数据" initialValue={dayjs()}>
                   <DatePicker style={{ width: '100%' }} placeholder="留空使用最新数据" />
                 </Form.Item>
+
+                <Card size="small" title="选股条件" style={{ marginBottom: 8 }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Button 
+                      type="link" 
+                      onClick={() => setFilterModalVisible(true)}
+                      icon={<FilterOutlined />}
+                    >
+                      管理选股条件
+                    </Button>
+                    <div style={{ fontSize: 12 }}>
+                      {filterSummary.loading ? (
+                        <span style={{ color: '#888' }}>加载中...</span>
+                      ) : filterSummary.error ? (
+                        <span style={{ color: '#ff4d4f' }}>加载失败</span>
+                      ) : filterSummary.total === 0 ? (
+                        <span style={{ color: '#888' }}>未启用任何条件</span>
+                      ) : (
+                        <>
+                          <span style={{ color: '#52c41a' }}>已启用 {filterSummary.total} 个条件</span>
+                          <br/>
+                          <span style={{ color: '#888' }}>预筛选: {filterSummary.pre} 个, 后筛选: {filterSummary.post} 个</span>
+                        </>
+                      )}
+                    </div>
+                  </Space>
+                </Card>
 
                 <Button
                   type="primary"
@@ -1928,6 +1975,19 @@ function MLPanel() {
               </Card>
             )}
           </Space>
+
+          <Modal
+            title="选股条件管理"
+            open={filterModalVisible}
+            onCancel={() => {
+              setFilterModalVisible(false)
+              loadFilterSummary()
+            }}
+            footer={null}
+            width={900}
+          >
+            <StockFilterManager embedded />
+          </Modal>
         </Tabs.TabPane>
 
         <Tabs.TabPane tab={<span style={{ color: '#fff' }}>已训练模型</span>} key="5">

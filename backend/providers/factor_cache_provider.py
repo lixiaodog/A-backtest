@@ -4,6 +4,7 @@
 从本地因子缓存数据库读取数据用于预测
 """
 import os
+import json
 import sqlite3
 import pandas as pd
 from typing import Optional, List, Dict
@@ -43,8 +44,10 @@ class FactorCacheProvider(DataProvider):
         self._error_message = None
         self._available_stocks = None
         self._raw_data_provider = None
+        self._stock_info: Dict[str, Dict] = {}
         
         self._check_availability()
+        self._load_stock_info()
     
     @property
     def name(self) -> str:
@@ -67,6 +70,26 @@ class FactorCacheProvider(DataProvider):
         
         self._error_message = None
     
+    def _load_stock_info(self):
+        """加载股票信息"""
+        stock_info_path = os.path.join(self.raw_data_path, 'STOCK_INFO.json')
+        if os.path.exists(stock_info_path):
+            try:
+                with open(stock_info_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    content = content.replace(': NaN', ': null')
+                    content = content.replace(':NaN', ':null')
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        self._stock_info = data
+                    elif isinstance(data, list):
+                        self._stock_info = {item.get('stock_code', ''): item for item in data}
+                if not self._silent:
+                    print(f"[FactorCacheProvider] 加载股票信息: {len(self._stock_info)} 只")
+            except Exception as e:
+                if not self._silent:
+                    print(f"[FactorCacheProvider] 加载股票信息失败: {e}")
+    
     def is_available(self) -> bool:
         """检查数据源是否可用"""
         return self._error_message is None
@@ -75,7 +98,16 @@ class FactorCacheProvider(DataProvider):
         return self._error_message
     
     def get_stock_info(self, stock_code: str) -> Dict:
-        return {'code': stock_code, 'name': stock_code}
+        info = self._stock_info.get(stock_code, {})
+        return {
+            'code': stock_code,
+            'name': info.get('stock_name', stock_code),
+            'market': info.get('market', ''),
+            'open_date': info.get('open_date'),
+            'total_capital': info.get('total_capital'),
+            'circulating_capital': info.get('circulating_capital'),
+            'pre_close': info.get('pre_close')
+        }
     
     def _get_db_path(self, stock_code: str) -> str:
         """获取股票缓存数据库路径"""
@@ -91,8 +123,13 @@ class FactorCacheProvider(DataProvider):
             for f in os.listdir(self.cache_path):
                 if f.endswith('.db'):
                     code = f[:-3]
+                    # 去除可能的市场后缀（如 .SZ, .SH, .BJ）
+                    if '.' in code:
+                        code = code.split('.')[0]
                     stocks.append(code)
-            self._available_stocks = sorted(stocks)
+            # 去重并排序
+            stocks = sorted(list(set(stocks)))
+            self._available_stocks = stocks
         except Exception as e:
             if not self._silent:
                 print(f"[FactorCacheProvider] 获取缓存股票列表失败: {e}")
@@ -157,7 +194,6 @@ class FactorCacheProvider(DataProvider):
                        factor_library: str,
                        latest_only: bool = False) -> Optional[pd.DataFrame]:
         """从数据库查询因子数据"""
-        # 标准化日期格式：将 YYYYMMDD 转换为 YYYY-MM-DD
         def normalize_date(date_str):
             if date_str and len(date_str) == 8 and date_str.isdigit():
                 return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
@@ -169,7 +205,6 @@ class FactorCacheProvider(DataProvider):
         try:
             with sqlite3.connect(db_path) as conn:
                 if latest_only:
-                    # 如果指定了 end_date，严格匹配该日期
                     if end_date:
                         query = '''
                             SELECT trade_date, factor_name, factor_value 
@@ -352,5 +387,6 @@ class FactorCacheProvider(DataProvider):
             'raw_data_path': self.raw_data_path,
             'factor_library': self.factor_library,
             'cached_stocks_count': len(stocks),
+            'stock_info_count': len(self._stock_info),
             'error': self._error_message
         }

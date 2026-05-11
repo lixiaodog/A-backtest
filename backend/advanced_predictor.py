@@ -4,11 +4,12 @@
 import threading
 import traceback
 import sys
+import json
+import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import pandas as pd
-import os
 from multiprocessing import cpu_count
 
 
@@ -32,7 +33,7 @@ class PredictionResult:
 
 
 def _predict_single_stock_process(args) -> Optional[PredictionResult]:
-    stock_code, model_info, period, market, data_source_config, predict_date = args
+    stock_code, model_info, period, market, data_source_config, predict_date, stock_name = args
     
     try:
         import joblib
@@ -91,10 +92,6 @@ def _predict_single_stock_process(args) -> Optional[PredictionResult]:
                 predict_dt = pd.to_datetime(predict_date)
                 if last_date.date() != predict_dt.date():
                     return None
-        
-        stock_name = stock_code
-        if "name" in realtime_data.columns and len(realtime_data) > 0:
-            stock_name = realtime_data["name"].iloc[-1]
         
         model_path = model_info.get("file_path")
         if not model_path:
@@ -193,6 +190,7 @@ class PredictionTask:
     period: str = "1d"
     predict_date: str = ""
     mode: str = "classification"  # 新增: classification 或 regression
+    filter_only: bool = False  # 仅使用筛选条件，不使用模型预测
     status: str = "pending"
     progress: int = 0
     message: str = ""
@@ -211,18 +209,47 @@ class AdvancedPredictor:
         self.max_workers = max_workers
         self.tasks: Dict[str, PredictionTask] = {}
         self._lock = threading.Lock()
+        self._stock_info: Dict[str, Dict] = {}
         
         if data_provider is None:
             from backend.providers import ProviderFactory
             self.data_provider = ProviderFactory.create_provider('akshare')
         else:
             self.data_provider = data_provider
+        
+        self._load_stock_info()
+    
+    def _load_stock_info(self):
+        """加载股票信息"""
+        stock_info_path = 'data/STOCK_INFO.json'
+        if os.path.exists(stock_info_path):
+            try:
+                with open(stock_info_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    content = content.replace(': NaN', ': null')
+                    content = content.replace(':NaN', ':null')
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        self._stock_info = data
+                    elif isinstance(data, list):
+                        self._stock_info = {item.get('stock_code', ''): item for item in data}
+                print(f"[AdvancedPredictor] 加载股票信息: {len(self._stock_info)} 只")
+            except Exception as e:
+                print(f"[AdvancedPredictor] 加载股票信息失败: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    def get_stock_name(self, stock_code: str) -> str:
+        """获取股票名称"""
+        info = self._stock_info.get(stock_code, {})
+        return info.get('stock_name', stock_code)
 
     def create_task(self, task_id: str, markets: List[str], stocks: List[str],
                     model_ids: List[str], sort_by: str = "confidence",
                     sort_order: str = "desc", top_n: int = 100,
                     fusion_mode: str = "intersection", period: str = "1d",
-                    predict_date: str = "", mode: str = "classification") -> PredictionTask:
+                    predict_date: str = "", mode: str = "classification",
+                    filter_only: bool = False) -> PredictionTask:
         import time
         task = PredictionTask(
             task_id=task_id,
@@ -236,6 +263,7 @@ class AdvancedPredictor:
             period=period,
             predict_date=predict_date,
             mode=mode,
+            filter_only=filter_only,
             status="pending",
             progress=0,
             start_time=time.time()
@@ -304,7 +332,44 @@ class AdvancedPredictor:
             
             dp_name = getattr(self.data_provider, 'name', 'unknown')
             task.message = f"[DEBUG dp={dp_name}] 扫描完成，共 {task.total_stocks} 只股票待预测"
+            task.progress = 8
+            
+            task.message = "应用选股条件筛选..."
+            all_stocks = self._apply_filters(all_stocks, task)
+            task.total_stocks = len(all_stocks)
+            print(f"[AdvancedPredictor] 筛选后剩余 {task.total_stocks} 只股票", flush=True)
+            task.message = f"筛选完成，共 {task.total_stocks} 只股票待预测"
             task.progress = 10
+
+            # 如果仅使用筛选条件，跳过模型预测
+            if task.filter_only:
+                task.message = "生成筛选结果..."
+                task.fused_results = []
+                top_n = int(task.top_n)  # 确保top_n是整数
+                for stock_code in all_stocks[:top_n]:
+                    result = PredictionResult(
+                        stock_code=stock_code,
+                        stock_name=self.get_stock_name(stock_code),
+                        model_id="filter_only",
+                        model_type="筛选条件",
+                        signal="筛选通过",
+                        confidence=1.0,
+                        buy_probability=1.0,
+                        sell_probability=0.0,
+                        hold_probability=0.0,
+                        predicted_return=0.0,
+                        raw_prediction={},
+                        mode="classification"
+                    )
+                    task.fused_results.append(result)
+                
+                task.message = "导出结果到Excel..."
+                self._export_results_to_excel(task)
+                
+                task.status = "completed"
+                task.progress = 100
+                task.message = f"筛选完成，共筛选出 {len(task.fused_results)} 只股票"
+                return
 
             is_regression = False
             for model_idx, model_id in enumerate(task.model_ids):
@@ -349,7 +414,7 @@ class AdvancedPredictor:
 
             task.fused_results = self._sort_single_result(
                 task.fused_results, task.sort_by, task.sort_order
-            )[:task.top_n]
+            )[:int(task.top_n)]
 
             task.message = "导出结果到Excel..."
             self._export_results_to_excel(task)
@@ -363,12 +428,44 @@ class AdvancedPredictor:
             task.message = f"预测失败: {str(e)}"
             traceback.print_exc()
 
+    def _apply_filters(self, stocks: List[str], task: PredictionTask) -> List[str]:
+        """应用选股条件筛选股票"""
+        try:
+            from backend.stock_filters import get_filter_engine
+            filter_engine = get_filter_engine()
+            
+            enabled_filters = filter_engine.get_enabled_filters()
+            if not enabled_filters:
+                print(f"[AdvancedPredictor] 未启用任何筛选条件，跳过筛选", flush=True)
+                return stocks
+            
+            print(f"[AdvancedPredictor] 已启用 {len(enabled_filters)} 个筛选条件", flush=True)
+            
+            filtered_stocks = filter_engine.apply_filters(
+                stock_list=stocks,
+                market=task.markets[0] if task.markets else None,
+                period=task.period,
+                predict_date=task.predict_date,
+                data_days=100
+            )
+            
+            return filtered_stocks
+            
+        except Exception as e:
+            print(f"[AdvancedPredictor] 筛选条件应用失败: {e}", flush=True)
+            traceback.print_exc()
+            return stocks
+
     def _get_stock_list(self, markets: List[str], stocks: List[str], period: str = "1d") -> List[str]:
         result_set = set()
 
         for stock in stocks:
             if stock and stock.strip():
-                result_set.add(stock.strip())
+                code = stock.strip()
+                # 去除可能的市场后缀（如 .SZ, .SH, .BJ）
+                if '.' in code:
+                    code = code.split('.')[0]
+                result_set.add(code)
 
         for market in markets:
             market_stocks = self.data_provider.get_market_stocks(market, period=period)
@@ -659,7 +756,7 @@ class AdvancedPredictor:
                         print(f"[Thread] {stock}: 成功 信号={prediction.get('signal', '')} 收益={prediction.get('predicted_return', 0)*100:.2f}%", flush=True)
                     return PredictionResult(
                         stock_code=stock,
-                        stock_name=stock,
+                        stock_name=self.get_stock_name(stock),
                         model_id=model_info.get("id", ""),
                         model_type=model_info.get("model_type", ""),
                         model_name=model_info.get("model_name", model_info.get("id", "")),
@@ -761,7 +858,7 @@ class AdvancedPredictor:
                     data_source_config = {'type': 'akshare'}
             
             predict_args.append((
-                stock, model_info, task.period, market, data_source_config, task.predict_date
+                stock, model_info, task.period, market, data_source_config, task.predict_date, self.get_stock_name(stock)
             ))
         
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -816,9 +913,7 @@ class AdvancedPredictor:
             if realtime_data is None or realtime_data.empty:
                 return None
             
-            stock_name = stock_code
-            if "name" in realtime_data.columns and len(realtime_data) > 0:
-                stock_name = realtime_data["name"].iloc[-1]
+            stock_name = self.get_stock_name(stock_code)
 
             model_path = model_info.get("file_path")
             if not model_path:
@@ -957,7 +1052,7 @@ class AdvancedPredictor:
         for model_id in task.model_ids:
             if model_id in task.results:
                 top_results_by_model[model_id] = {
-                    r.stock_code: r for r in task.results[model_id][:task.top_n]
+                    r.stock_code: r for r in task.results[model_id][:int(task.top_n)]
                 }
 
         if task.fusion_mode == "intersection":
@@ -987,6 +1082,10 @@ class AdvancedPredictor:
         if not common_stocks:
             return []
 
+        # 判断模型类型（分类 or 回归）
+        first_result = list(results_by_model.values())[0][list(common_stocks)[0]]
+        is_regression = first_result.mode == "regression"
+
         fused = []
         for stock_code in common_stocks:
             total_confidence = 0
@@ -1001,21 +1100,30 @@ class AdvancedPredictor:
                 total_predicted_return += result.predicted_return or 0
                 signals.append(result.signal)
 
-            buy_count = signals.count("买入") + signals.count("强烈买入") + signals.count("轻度买入")
-            sell_count = signals.count("卖出") + signals.count("强烈卖出") + signals.count("轻度卖出")
-
-            if buy_count > sell_count:
-                final_signal = "买入"
-            elif sell_count > buy_count:
-                final_signal = "卖出"
-            else:
-                final_signal = "持有"
-
             avg_confidence = total_confidence / len(results_by_model)
             avg_buy_prob = total_buy_prob / len(results_by_model)
             avg_predicted_return = total_predicted_return / len(results_by_model)
 
-            first_result = list(results_by_model.values())[0][stock_code]
+            if is_regression:
+                # 回归模型：根据平均预测收益率判定信号
+                if avg_predicted_return > 0.02:  # 预测收益率 > 2%
+                    final_signal = "买入"
+                elif avg_predicted_return < -0.02:  # 预测收益率 < -2%
+                    final_signal = "卖出"
+                else:
+                    final_signal = "持有"
+            else:
+                # 分类模型：根据信号投票判定
+                buy_count = signals.count("买入") + signals.count("强烈买入") + signals.count("轻度买入")
+                sell_count = signals.count("卖出") + signals.count("强烈卖出") + signals.count("轻度卖出")
+
+                if buy_count > sell_count:
+                    final_signal = "买入"
+                elif sell_count > buy_count:
+                    final_signal = "卖出"
+                else:
+                    final_signal = "持有"
+
             mode = first_result.mode
 
             fused.append(PredictionResult(
@@ -1028,9 +1136,13 @@ class AdvancedPredictor:
                 confidence=avg_confidence,
                 buy_probability=avg_buy_prob,
                 predicted_return=avg_predicted_return,
-                raw_prediction={"models": len(results_by_model)},
+                raw_prediction={"models": len(results_by_model), "mode": mode},
                 mode=mode
             ))
+
+        # 回归模型按预测收益率排序
+        if is_regression:
+            fused.sort(key=lambda x: x.predicted_return, reverse=True)
 
         return fused
 
@@ -1043,20 +1155,38 @@ class AdvancedPredictor:
         for model_results in results_by_model.values():
             all_stocks.update(model_results.keys())
 
+        # 判断模型类型（分类 or 回归）
+        first_model_results = list(results_by_model.values())[0]
+        if first_model_results:
+            first_result = list(first_model_results.values())[0]
+            is_regression = first_result.mode == "regression"
+        else:
+            is_regression = False
+
         fused = []
         for stock_code in all_stocks:
             best_result = None
-            best_confidence = -1
+            best_score = -float('inf')
 
             for model_results in results_by_model.values():
                 if stock_code in model_results:
                     result = model_results[stock_code]
-                    if result.confidence > best_confidence:
-                        best_confidence = result.confidence
+                    # 回归模型按预测收益率选择，分类模型按置信度选择
+                    if is_regression:
+                        score = result.predicted_return
+                    else:
+                        score = result.confidence
+                    
+                    if score > best_score:
+                        best_score = score
                         best_result = result
 
             if best_result:
                 fused.append(best_result)
+
+        # 回归模型按预测收益率排序
+        if is_regression:
+            fused.sort(key=lambda x: x.predicted_return, reverse=True)
 
         return fused
 
@@ -1064,6 +1194,14 @@ class AdvancedPredictor:
                       task: PredictionTask) -> List[PredictionResult]:
         if not results_by_model:
             return []
+
+        # 判断模型类型（分类 or 回归）
+        first_model_results = list(results_by_model.values())[0]
+        if first_model_results:
+            first_result = list(first_model_results.values())[0]
+            is_regression = first_result.mode == "regression"
+        else:
+            is_regression = False
 
         stock_votes = {}
 
@@ -1082,11 +1220,21 @@ class AdvancedPredictor:
                 stock_votes[stock_code]["total_confidence"] += result.confidence
                 stock_votes[stock_code]["total_predicted_return"] += result.predicted_return or 0
 
-        sorted_stocks = sorted(
-            stock_votes.items(),
-            key=lambda x: (x[1]["buy_votes"], x[1]["total_confidence"]),
-            reverse=True
-        )
+        # 根据模型类型选择排序方式
+        if is_regression:
+            # 回归模型：按平均预测收益率排序
+            sorted_stocks = sorted(
+                stock_votes.items(),
+                key=lambda x: x[1]["total_predicted_return"] / len(x[1]["results"]),
+                reverse=True
+            )
+        else:
+            # 分类模型：按买入投票数和置信度排序
+            sorted_stocks = sorted(
+                stock_votes.items(),
+                key=lambda x: (x[1]["buy_votes"], x[1]["total_confidence"]),
+                reverse=True
+            )
 
         fused = []
         for stock_code, vote_info in sorted_stocks:
@@ -1094,12 +1242,22 @@ class AdvancedPredictor:
             buy_ratio = vote_info["buy_votes"] / len(vote_info["results"])
             avg_predicted_return = vote_info["total_predicted_return"] / len(vote_info["results"])
 
-            if buy_ratio >= 0.5:
-                signal = "买入"
-            elif buy_ratio == 0:
-                signal = "卖出"
+            if is_regression:
+                # 回归模型：根据平均预测收益率判定信号
+                if avg_predicted_return > 0.02:  # 预测收益率 > 2%
+                    signal = "买入"
+                elif avg_predicted_return < -0.02:  # 预测收益率 < -2%
+                    signal = "卖出"
+                else:
+                    signal = "持有"
             else:
-                signal = "持有"
+                # 分类模型：根据买入投票比例判定信号
+                if buy_ratio >= 0.5:
+                    signal = "买入"
+                elif buy_ratio == 0:
+                    signal = "卖出"
+                else:
+                    signal = "持有"
 
             first_result = vote_info["results"][0]
             mode = first_result.mode
@@ -1115,7 +1273,8 @@ class AdvancedPredictor:
                 predicted_return=avg_predicted_return,
                 raw_prediction={
                     "buy_votes": vote_info["buy_votes"],
-                    "total_models": len(vote_info["results"])
+                    "total_models": len(vote_info["results"]),
+                    "mode": mode
                 },
                 mode=mode
             ))

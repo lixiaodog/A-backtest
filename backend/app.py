@@ -1682,8 +1682,8 @@ def ml_predict_advanced():
         # 数据源配置
         data_source = data.get('data_source', 'akshare')
         
-        if not model_ids:
-            return jsonify({'error': '请至少选择一个模型'}), 400
+        # 允许不选择模型，仅使用选股条件筛选
+        filter_only = len(model_ids) == 0
 
         # 根据数据源创建 provider，从后端配置读取路径
         from backend.providers import ProviderFactory
@@ -1727,13 +1727,14 @@ def ml_predict_advanced():
         
         # 获取模型模式（从第一个模型推断）
         model_mode = "classification"
-        try:
-            registry = ModelRegistry()
-            first_model = registry.get_model_by_id(model_ids[0])
-            if first_model:
-                model_mode = first_model.get('mode', 'classification')
-        except:
-            pass
+        if not filter_only:
+            try:
+                registry = ModelRegistry()
+                first_model = registry.get_model_by_id(model_ids[0])
+                if first_model:
+                    model_mode = first_model.get('mode', 'classification')
+            except:
+                pass
         
         predictor = AdvancedPredictor(max_workers=4, data_provider=provider)
         
@@ -1748,7 +1749,8 @@ def ml_predict_advanced():
             fusion_mode=fusion_mode,
             period=period,
             predict_date=predict_date,
-            mode=model_mode
+            mode=model_mode,
+            filter_only=filter_only
         )
         
         register_task(task_id, predictor)
@@ -1758,10 +1760,15 @@ def ml_predict_advanced():
         thread.daemon = True
         thread.start()
 
+        if filter_only:
+            message = '选股任务已启动，仅使用选股条件筛选'
+        else:
+            message = f'选股任务已启动，使用 {len(model_ids)} 个模型预测'
+
         return jsonify({
             'task_id': task_id,
             'status': 'started',
-            'message': f'选股任务已启动，使用 {len(model_ids)} 个模型预测'
+            'message': message
         })
 
     except Exception as e:
@@ -1974,7 +1981,7 @@ def ml_download_prediction_file(task_id, file_key):
 
 @app.route('/api/ml/predict/advanced/<task_id>/download_all', methods=['GET'])
 def ml_download_all_advanced_prediction(task_id):
-    """打包下载所有选股结果文件"""
+    """下载选股结果文件（单文件直接下载Excel，多文件打包ZIP）"""
     import zipfile
     import io
     import glob
@@ -2008,6 +2015,21 @@ def ml_download_all_advanced_prediction(task_id):
         if not export_files:
             return jsonify({'error': '没有可下载的文件，任务可能已过期或不存在'}), 404
 
+        # 如果只有一个文件，直接返回Excel
+        if len(export_files) == 1:
+            filepath = list(export_files.values())[0]
+            if os.path.exists(filepath):
+                filename = os.path.basename(filepath)
+                return send_file(
+                    filepath,
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    as_attachment=True,
+                    download_name=filename
+                )
+            else:
+                return jsonify({'error': '文件不存在'}), 404
+
+        # 多个文件打包成ZIP
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for key, filepath in export_files.items():
@@ -3115,10 +3137,145 @@ def ml_get_evaluation_tasks():
 # ==================== 模型评估 API 结束 ====================
 
 
+# ==================== 选股条件 API 开始 ====================
+
+@app.route('/api/stock-filters', methods=['GET'])
+def get_stock_filters():
+    """获取所有选股条件"""
+    try:
+        from backend.stock_filters import get_filter_engine
+        from backend.stock_filters.registry import FilterRegistry
+        FilterRegistry.auto_discover()
+        engine = get_filter_engine()
+        filters = engine.get_all_filters()
+        return jsonify({
+            'filters': [f.to_dict() for f in filters],
+            'available_types': FilterRegistry.list_filters()
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters/types', methods=['GET'])
+def get_stock_filter_types():
+    """获取所有可用的条件类型"""
+    try:
+        from backend.stock_filters.registry import FilterRegistry
+        FilterRegistry.auto_discover()
+        return jsonify({'types': FilterRegistry.list_filters()})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters', methods=['POST'])
+def create_stock_filter():
+    """创建新的选股条件"""
+    try:
+        from backend.stock_filters import get_filter_engine, StockFilter
+        
+        data = request.json
+        stock_filter = StockFilter(
+            id=data.get('id', ''),
+            name=data.get('name', ''),
+            description=data.get('description', ''),
+            category=data.get('category', 'technical'),
+            filter_stage=data.get('filter_stage', 'post_filter'),
+            condition_type=data.get('condition_type', ''),
+            parameters=data.get('parameters', {}),
+            enabled=data.get('enabled', True),
+            priority=data.get('priority', 0)
+        )
+        
+        engine = get_filter_engine()
+        engine.add_filter(stock_filter)
+        
+        return jsonify({'status': 'created', 'filter': stock_filter.to_dict()})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters/<filter_id>', methods=['PUT'])
+def update_stock_filter(filter_id):
+    """更新选股条件"""
+    try:
+        from backend.stock_filters import get_filter_engine
+        
+        data = request.json
+        engine = get_filter_engine()
+        
+        if engine.update_filter(filter_id, data):
+            return jsonify({'status': 'updated'})
+        else:
+            return jsonify({'error': '条件不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters/<filter_id>', methods=['DELETE'])
+def delete_stock_filter(filter_id):
+    """删除选股条件"""
+    try:
+        from backend.stock_filters import get_filter_engine
+        
+        engine = get_filter_engine()
+        
+        if engine.remove_filter(filter_id):
+            return jsonify({'status': 'deleted'})
+        else:
+            return jsonify({'error': '条件不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters/<filter_id>/toggle', methods=['POST'])
+def toggle_stock_filter(filter_id):
+    """切换选股条件启用状态"""
+    try:
+        from backend.stock_filters import get_filter_engine
+        
+        engine = get_filter_engine()
+        
+        if engine.toggle_filter(filter_id):
+            return jsonify({'status': 'toggled'})
+        else:
+            return jsonify({'error': '条件不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stock-filters/preview', methods=['POST'])
+def preview_stock_filter():
+    """预览选股条件筛选效果"""
+    try:
+        from backend.stock_filters import get_filter_engine
+        
+        data = request.json
+        stock_list = data.get('stocks', [])
+        filter_id = data.get('filter_id')
+        context = data.get('context', {})
+        
+        engine = get_filter_engine()
+        result = engine.preview_filter(stock_list, filter_id, context)
+        
+        return jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 选股条件 API 结束 ====================
+
+
 if __name__ == '__main__':
     print("=" * 50)
-    print("Backtrader 回测服务已启动")
+    print("Backtrader 回测服务已启动 (热加载模式)")
     print("API: http://localhost:5000/api/backtest")
     print("WebSocket: ws://localhost:5000")
     print("=" * 50)
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=True, allow_unsafe_werkzeug=True)
