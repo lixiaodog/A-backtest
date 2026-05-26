@@ -16,17 +16,17 @@ class DataSourceConfig:
     # 默认配置
     DEFAULT_CONFIG = {
         'local': {
-            'data_path': './data/',  # 本地CSV数据路径
+            'data_path': 'data/',  # 本地CSV数据路径
         },
         'sqlite': {
-            'db_path': './data/stock_data.db',       # SQLite数据库路径
+            'db_path': 'data/stock_data.db',       # SQLite数据库路径
             'table_name': 'stock_data',               # 数据表名称
             'code_column': 'stock_code',              # 股票代码列名
             'date_column': 'date',                    # 日期列名
         },
         'factor_cache': {
-            'cache_path': './data/factor_cache/',     # 因子缓存目录
-            'raw_data_path': './data/',               # 原始数据目录
+            'cache_path': 'data/factor_cache/',     # 因子缓存目录
+            'raw_data_path': 'data/',               # 原始数据目录
             'factor_library': 'alpha191',             # 默认因子库
         }
     }
@@ -72,7 +72,7 @@ class DataSourceConfig:
     @classmethod
     def get_local_data_path(cls) -> str:
         """获取本地数据路径"""
-        return cls.get_config('local').get('data_path', './data/stocks/')
+        return cls.get_config('local').get('data_path', 'data/stocks/')
     
     @classmethod
     def get_sqlite_config(cls) -> Dict[str, Any]:

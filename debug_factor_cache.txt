@@ -1,0 +1,340 @@
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe
+cwd: C:\work\backtrader\backend, cache_path: C:\work\backtrader\data\factor_cache, exists: True
+sys.executable: C:\work\backtrader\venv\Scripts\python.exe

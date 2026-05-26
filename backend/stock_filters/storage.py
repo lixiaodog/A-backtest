@@ -4,8 +4,11 @@ from typing import Optional
 from .models import FilterConfig
 
 
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+
+
 class FilterStorage:
-    DEFAULT_STORAGE_PATH = 'data/stock_filters.json'
+    DEFAULT_STORAGE_PATH = os.path.join(DATA_DIR, 'stock_filters.json')
     
     def __init__(self, storage_path: str = None):
         self.storage_path = storage_path or self.DEFAULT_STORAGE_PATH

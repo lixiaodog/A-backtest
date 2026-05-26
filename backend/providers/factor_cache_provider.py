@@ -21,8 +21,8 @@ class FactorCacheProvider(DataProvider):
     """
     
     def __init__(self, 
-                 cache_path: str = './data/factor_cache/',
-                 raw_data_path: str = './data/',
+                 cache_path: str = 'data/factor_cache/',
+                 raw_data_path: str = 'data/',
                  factor_library: str = 'alpha191',
                  silent: bool = False,
                  stock_file_map: Dict[str, str] = None):

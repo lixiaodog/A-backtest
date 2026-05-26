@@ -1113,10 +1113,7 @@ def ml_train_incremental():
         # 如果前端提供了股票列表，使用它；否则根据市场获取股票列表
         if not stock_list:
             import glob
-            cache_path = './data/factor_cache/'
-            if not os.path.isabs(cache_path):
-                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
-            
+            cache_path = 'data/factor_cache/'
             db_files = glob.glob(os.path.join(cache_path, '*.db'))
             
             # 根据市场筛选股票
@@ -1462,14 +1459,9 @@ def ml_predict():
         
         if data_source == 'factor_cache':
             cache_config = DataSourceConfig.get_config('factor_cache')
-            cache_path = cache_config.get('cache_path', './data/factor_cache/')
-            raw_data_path = cache_config.get('raw_data_path', './data/')
+            cache_path = cache_config.get('cache_path', 'data/factor_cache/')
+            raw_data_path = cache_config.get('raw_data_path', 'data/')
             factor_library = cache_config.get('factor_library', 'alpha191')
-            # 转换为绝对路径
-            if not os.path.isabs(cache_path):
-                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
-            if not os.path.isabs(raw_data_path):
-                raw_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_data_path))
             provider = ProviderFactory.create_provider(
                 'factor_cache',
                 cache_path=cache_path,
@@ -1691,26 +1683,15 @@ def ml_predict_advanced():
         
         if data_source == 'local':
             local_config = DataSourceConfig.get_config('local')
-            data_path = local_config.get('data_path', './data/stocks/')
+            data_path = local_config.get('data_path', 'data/stocks/')
             provider = ProviderFactory.create_provider('local', data_path=data_path)
             if not provider.is_available():
                 return jsonify({'error': f'本地数据路径不可用: {provider.get_error_message()}'}), 400
         elif data_source == 'factor_cache':
             cache_config = DataSourceConfig.get_config('factor_cache')
-            cache_path = cache_config.get('cache_path', './data/factor_cache/')
-            raw_data_path = cache_config.get('raw_data_path', './data/')
+            cache_path = cache_config.get('cache_path', 'data/factor_cache/')
+            raw_data_path = cache_config.get('raw_data_path', 'data/')
             factor_library = cache_config.get('factor_library', 'alpha191')
-            # 转换为绝对路径
-            if not os.path.isabs(cache_path):
-                cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', cache_path))
-            if not os.path.isabs(raw_data_path):
-                raw_data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', raw_data_path))
-            # 写入调试文件（使用绝对路径）
-            debug_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'debug_factor_cache.txt'))
-            import sys
-            with open(debug_path, 'a') as f:
-                f.write(f"cwd: {os.getcwd()}, cache_path: {cache_path}, exists: {os.path.exists(cache_path)}\n")
-                f.write(f"sys.executable: {sys.executable}\n")
             provider = ProviderFactory.create_provider(
                 'factor_cache',
                 cache_path=cache_path,
@@ -3162,7 +3143,7 @@ def get_stock_filter_types():
     """获取所有可用的条件类型"""
     try:
         from backend.stock_filters.registry import FilterRegistry
-        FilterRegistry.auto_discover()
+        FilterRegistry.auto_discover(force=True)
         return jsonify({'types': FilterRegistry.list_filters()})
     except Exception as e:
         traceback.print_exc()
@@ -3264,6 +3245,155 @@ def preview_stock_filter():
         result = engine.preview_filter(stock_list, filter_id, context)
         
         return jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 选股计划 API ====================
+
+@app.route('/api/selection-plans', methods=['GET'])
+def get_selection_plans():
+    """获取所有选股计划"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage
+        storage = get_selection_plan_storage()
+        plans = storage.load_all()
+        return jsonify({
+            'plans': [p.to_dict() for p in plans]
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/selection-plans', methods=['POST'])
+def save_selection_plan():
+    """保存选股计划"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage, SelectionPlan
+        
+        data = request.json
+        name = data.get('name', '未命名计划')
+        description = data.get('description', '')
+        filters = data.get('filters', [])
+        
+        plan = SelectionPlan(
+            id='',
+            name=name,
+            description=description,
+            filters=filters
+        )
+        
+        storage = get_selection_plan_storage()
+        storage.add_plan(plan)
+        
+        return jsonify({
+            'success': True,
+            'plan': plan.to_dict()
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/selection-plans/<plan_id>', methods=['GET'])
+def get_selection_plan(plan_id):
+    """获取选股计划详情"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage
+        storage = get_selection_plan_storage()
+        plan = storage.get_plan(plan_id)
+        
+        if plan:
+            return jsonify(plan.to_dict())
+        else:
+            return jsonify({'error': '计划不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/selection-plans/<plan_id>', methods=['PUT'])
+def update_selection_plan(plan_id):
+    """更新选股计划"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage
+        
+        data = request.json
+        storage = get_selection_plan_storage()
+        success = storage.update_plan(plan_id, data)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': '计划不存在'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/selection-plans/<plan_id>', methods=['DELETE'])
+def delete_selection_plan(plan_id):
+    """删除选股计划"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage
+        storage = get_selection_plan_storage()
+        success = storage.delete_plan(plan_id)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/selection-plans/<plan_id>/apply', methods=['POST'])
+def apply_selection_plan(plan_id):
+    """应用选股计划（将计划的筛选条件应用到当前配置）"""
+    try:
+        from backend.stock_filters.plan_storage import get_selection_plan_storage
+        from backend.stock_filters import get_filter_engine
+        from backend.stock_filters.models import StockFilter
+        
+        storage = get_selection_plan_storage()
+        plan = storage.get_plan(plan_id)
+        
+        if not plan:
+            return jsonify({'error': '计划不存在'}), 404
+        
+        engine = get_filter_engine()
+        
+        for f in engine.get_all_filters():
+            f.enabled = False
+        
+        plan_filter_ids = set()
+        for filter_data in plan.filters:
+            condition_type = filter_data.get('condition_type')
+            parameters = filter_data.get('parameters', {})
+            
+            existing = None
+            for f in engine.get_all_filters():
+                if f.condition_type == condition_type and f.parameters == parameters:
+                    existing = f
+                    break
+            
+            if existing:
+                existing.enabled = True
+                plan_filter_ids.add(existing.id)
+            else:
+                stock_filter = StockFilter.from_dict(filter_data)
+                stock_filter.enabled = True
+                engine.add_filter(stock_filter)
+        
+        engine._save_config()
+        
+        return jsonify({
+            'success': True,
+            'applied_count': len(plan.filters)
+        })
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

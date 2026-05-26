@@ -38,7 +38,7 @@ class LocalDataProvider(DataProvider):
         if not data_path:
             from backend.config import DataSourceConfig
             config = DataSourceConfig.get_config('local')
-            data_path = config.get('data_path', './data/')
+            data_path = config.get('data_path', 'data/')
         
         self.data_path = data_path
         self.file_pattern = file_pattern
@@ -254,7 +254,7 @@ class LocalDataProvider(DataProvider):
                 target_date = pd.to_datetime(kwargs['date'])
                 df = df[df['date'] == target_date]
             
-            # 取最近 N 天
+            # 取最近 N 天（在 end_date 过滤之后）
             if 'days' in kwargs and 'date' in df.columns:
                 days = kwargs['days']
                 df = df.tail(days)

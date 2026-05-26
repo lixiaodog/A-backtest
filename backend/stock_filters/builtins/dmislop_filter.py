@@ -185,6 +185,7 @@ class DMISLOPFilter(BaseFilter):
         pdi_threshold = parameters.get('pdi_threshold', 30.0)
         signal_type = parameters.get('signal_type', 'buy')
         prev_signal_type = parameters.get('prev_signal_type', '任意')
+        predict_date = context.get('predict_date')
         
         try:
             high = stock_data['high'].values
@@ -193,24 +194,35 @@ class DMISLOPFilter(BaseFilter):
             
             n = len(close)
             min_required = max(ma2_period, adx_period + 3, ma100_period + 3)
-            if n < min_required + 1:  # 需要额外1个BAR，因为排除最后一个BAR
+            
+            target_idx = None
+            if predict_date:
+                try:
+                    import pandas as pd
+                    predict_date_dt = pd.to_datetime(predict_date)
+                    if predict_date_dt in stock_data.index:
+                        target_idx = stock_data.index.get_loc(predict_date_dt)
+                except:
+                    pass
+            
+            if target_idx is None:
+                target_idx = n - 1
+            
+            if target_idx < min_required:
                 return False
             
             ma1 = self._calc_ma(close, ma1_period)
             ma2 = self._calc_ma(close, ma2_period)
             ma100 = self._calc_ma(close, ma100_period)
             
-            # 排除最后一个BAR（可能是当天的数据，还在更新中）
-            # 使用倒数第二个BAR作为最新的信号
             signal_list = []
-            for i in range(n - 1):  # 不包括最后一个BAR
+            for i in range(target_idx + 1):
                 sig = self._calc_signal_for_bar(high, low, close, ma1, ma2, ma100, i,
                                                  slope_up, slope_down, adx_period, pdi_threshold,
                                                  ma1_period, ma2_period, ma100_period)
                 signal_list.append(sig)
             
-            # 获取最新的信号（倒数第二个BAR的信号）
-            curr_signal = signal_list[-1]
+            curr_signal = signal_list[target_idx]
             
             if signal_type == 'buy' and curr_signal != 1:
                 return False
@@ -219,7 +231,7 @@ class DMISLOPFilter(BaseFilter):
             
             if prev_signal_type != '任意':
                 last_signal = 0
-                for i in range(len(signal_list) - 2, -1, -1):
+                for i in range(target_idx - 1, -1, -1):
                     if signal_list[i] != 0:
                         last_signal = signal_list[i]
                         break

@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   Card, Table, Button, Switch, Tag, Modal, Form, Input, Select,
-  Space, message, Popconfirm, Badge, Divider, Row, Col, InputNumber
+  Space, message, Popconfirm, Badge, Divider, Row, Col, InputNumber,
+  Dropdown, List
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, FilterOutlined,
-  CheckCircleOutlined, CloseCircleOutlined
+  CheckCircleOutlined, CloseCircleOutlined, SaveOutlined, FolderOutlined,
+  DownloadOutlined
 } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -18,6 +20,11 @@ const StockFilterManager = ({ embedded = false }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingFilter, setEditingFilter] = useState(null);
   const [form] = Form.useForm();
+  
+  const [savePlanModalVisible, setSavePlanModalVisible] = useState(false);
+  const [loadPlanModalVisible, setLoadPlanModalVisible] = useState(false);
+  const [plans, setPlans] = useState([]);
+  const [planForm] = Form.useForm();
 
   useEffect(() => {
     loadFilters();
@@ -40,6 +47,16 @@ const StockFilterManager = ({ embedded = false }) => {
       message.error('加载条件失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPlans = async () => {
+    try {
+      const res = await axios.get('http://localhost:5000/api/selection-plans');
+      setPlans(res.data.plans || []);
+    } catch (err) {
+      console.error('加载选股计划失败:', err);
+      message.error('加载选股计划失败');
     }
   };
 
@@ -91,6 +108,60 @@ const StockFilterManager = ({ embedded = false }) => {
       loadFilters();
     } catch (err) {
       message.error(err.response?.data?.error || '操作失败');
+    }
+  };
+
+  const handleSavePlan = () => {
+    const enabledFilters = filters.filter(f => f.enabled);
+    if (enabledFilters.length === 0) {
+      message.warning('请先启用至少一个筛选条件');
+      return;
+    }
+    planForm.resetFields();
+    setSavePlanModalVisible(true);
+  };
+
+  const handleSavePlanSubmit = async () => {
+    try {
+      const values = await planForm.validateFields();
+      const enabledFilters = filters.filter(f => f.enabled);
+      
+      await axios.post('http://localhost:5000/api/selection-plans', {
+        name: values.name,
+        description: values.description,
+        filters: enabledFilters
+      });
+      
+      message.success('选股计划已保存');
+      setSavePlanModalVisible(false);
+    } catch (err) {
+      message.error(err.response?.data?.error || '保存失败');
+    }
+  };
+
+  const handleLoadPlan = async () => {
+    await loadPlans();
+    setLoadPlanModalVisible(true);
+  };
+
+  const handleApplyPlan = async (planId) => {
+    try {
+      const res = await axios.post(`http://localhost:5000/api/selection-plans/${planId}/apply`);
+      message.success(`已加载 ${res.data.applied_count} 个筛选条件`);
+      setLoadPlanModalVisible(false);
+      loadFilters();
+    } catch (err) {
+      message.error(err.response?.data?.error || '加载失败');
+    }
+  };
+
+  const handleDeletePlan = async (planId) => {
+    try {
+      await axios.delete(`http://localhost:5000/api/selection-plans/${planId}`);
+      message.success('已删除');
+      loadPlans();
+    } catch (err) {
+      message.error('删除失败');
     }
   };
 
@@ -199,12 +270,31 @@ const StockFilterManager = ({ embedded = false }) => {
   const selectedType = Form.useWatch('condition_type', form);
   const selectedTypeInfo = availableTypes.find(t => t.filter_id === selectedType);
 
+  const planButtons = (
+    <Space>
+      <Button 
+        icon={<SaveOutlined />} 
+        onClick={handleSavePlan}
+        disabled={filters.filter(f => f.enabled).length === 0}
+      >
+        保存计划
+      </Button>
+      <Button 
+        icon={<FolderOutlined />} 
+        onClick={handleLoadPlan}
+      >
+        加载计划
+      </Button>
+    </Space>
+  );
+
   const content = (
     <>
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
           添加条件
         </Button>
+        {planButtons}
         <span style={{ marginLeft: 16, color: '#888' }}>
           已启用 {filters.filter(f => f.enabled).length} 个条件
         </span>
@@ -322,6 +412,84 @@ const StockFilterManager = ({ embedded = false }) => {
           )}
         </Form>
       </Modal>
+
+      <Modal
+        title="保存选股计划"
+        open={savePlanModalVisible}
+        onOk={handleSavePlanSubmit}
+        onCancel={() => setSavePlanModalVisible(false)}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={planForm} layout="vertical">
+          <Form.Item
+            name="name"
+            label="计划名称"
+            rules={[{ required: true, message: '请输入计划名称' }]}
+          >
+            <Input placeholder="如：趋势跟踪策略" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="计划描述" />
+          </Form.Item>
+          <div style={{ color: '#888', fontSize: 12 }}>
+            将保存当前已启用的 {filters.filter(f => f.enabled).length} 个筛选条件
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="加载选股计划"
+        open={loadPlanModalVisible}
+        onCancel={() => setLoadPlanModalVisible(false)}
+        footer={null}
+        width={500}
+      >
+        {plans.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 20, color: '#888' }}>
+            暂无保存的计划
+          </div>
+        ) : (
+          <List
+            dataSource={plans}
+            renderItem={plan => (
+              <List.Item
+                actions={[
+                  <Button 
+                    type="link" 
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => handleApplyPlan(plan.id)}
+                  >
+                    加载
+                  </Button>,
+                  <Popconfirm
+                    title="确定删除此计划？"
+                    onConfirm={() => handleDeletePlan(plan.id)}
+                    okText="确定"
+                    cancelText="取消"
+                  >
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                ]}
+              >
+                <List.Item.Meta
+                  title={plan.name}
+                  description={
+                    <div>
+                      <div>{plan.description || '无描述'}</div>
+                      <div style={{ fontSize: 12, color: '#888' }}>
+                        {plan.filters?.length || 0} 个筛选条件 · 
+                        创建于 {new Date(plan.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Modal>
     </>
   );
 
@@ -339,9 +507,12 @@ const StockFilterManager = ({ embedded = false }) => {
         </Space>
       }
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-          添加条件
-        </Button>
+        <Space>
+          {planButtons}
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+            添加条件
+          </Button>
+        </Space>
       }
     >
       <Table
@@ -456,6 +627,84 @@ const StockFilterManager = ({ embedded = false }) => {
             </>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        title="保存选股计划"
+        open={savePlanModalVisible}
+        onOk={handleSavePlanSubmit}
+        onCancel={() => setSavePlanModalVisible(false)}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={planForm} layout="vertical">
+          <Form.Item
+            name="name"
+            label="计划名称"
+            rules={[{ required: true, message: '请输入计划名称' }]}
+          >
+            <Input placeholder="如：趋势跟踪策略" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="计划描述" />
+          </Form.Item>
+          <div style={{ color: '#888', fontSize: 12 }}>
+            将保存当前已启用的 {filters.filter(f => f.enabled).length} 个筛选条件
+          </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="加载选股计划"
+        open={loadPlanModalVisible}
+        onCancel={() => setLoadPlanModalVisible(false)}
+        footer={null}
+        width={500}
+      >
+        {plans.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 20, color: '#888' }}>
+            暂无保存的计划
+          </div>
+        ) : (
+          <List
+            dataSource={plans}
+            renderItem={plan => (
+              <List.Item
+                actions={[
+                  <Button 
+                    type="link" 
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => handleApplyPlan(plan.id)}
+                  >
+                    加载
+                  </Button>,
+                  <Popconfirm
+                    title="确定删除此计划？"
+                    onConfirm={() => handleDeletePlan(plan.id)}
+                    okText="确定"
+                    cancelText="取消"
+                  >
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                ]}
+              >
+                <List.Item.Meta
+                  title={plan.name}
+                  description={
+                    <div>
+                      <div>{plan.description || '无描述'}</div>
+                      <div style={{ fontSize: 12, color: '#888' }}>
+                        {plan.filters?.length || 0} 个筛选条件 · 
+                        创建于 {new Date(plan.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
       </Modal>
     </Card>
   );

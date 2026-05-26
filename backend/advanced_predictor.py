@@ -52,15 +52,15 @@ def _predict_single_stock_process(args) -> Optional[PredictionResult]:
             
             if source_type == 'factor_cache':
                 data_provider = FactorCacheProvider(
-                    cache_path=data_source_config.get('cache_path', './data/factor_cache/'),
-                    raw_data_path=data_source_config.get('raw_data_path', './data/'),
+                    cache_path=data_source_config.get('cache_path', 'data/factor_cache/'),
+                    raw_data_path=data_source_config.get('raw_data_path', 'data/'),
                     factor_library=data_source_config.get('factor_library', 'alpha191'),
                     silent=False,
                     stock_file_map=stock_file_map
                 )
             elif source_type == 'local':
                 data_provider = LocalDataProvider(
-                    data_path=data_source_config.get('data_path', './data/'),
+                    data_path=data_source_config.get('data_path', 'data/'),
                     silent=False,
                     stock_file_map=stock_file_map
                 )
@@ -221,7 +221,7 @@ class AdvancedPredictor:
     
     def _load_stock_info(self):
         """加载股票信息"""
-        stock_info_path = 'data/STOCK_INFO.json'
+        stock_info_path = os.path.join(os.path.dirname(__file__), 'data', 'STOCK_INFO.json')
         if os.path.exists(stock_info_path):
             try:
                 with open(stock_info_path, 'r', encoding='utf-8') as f:
@@ -843,14 +843,14 @@ class AdvancedPredictor:
                 if provider.name == 'local':
                     data_source_config = {
                         'type': 'local',
-                        'data_path': getattr(provider, 'data_path', './data/'),
+                        'data_path': getattr(provider, 'data_path', 'data/'),
                         'stock_file_map': stock_file_map
                     }
                 elif provider.name == 'factor_cache':
                     data_source_config = {
                         'type': 'factor_cache',
-                        'cache_path': getattr(provider, 'cache_path', './data/factor_cache/'),
-                        'raw_data_path': getattr(provider, 'raw_data_path', './data/'),
+                        'cache_path': getattr(provider, 'cache_path', 'data/factor_cache/'),
+                        'raw_data_path': getattr(provider, 'raw_data_path', 'data/'),
                         'factor_library': getattr(provider, 'factor_library', 'alpha191'),
                         'stock_file_map': stock_file_map
                     }

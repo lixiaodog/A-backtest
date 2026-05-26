@@ -41,10 +41,17 @@ class FilterRegistry:
         return [f for f in cls._filters.values() if f.filter_stage == stage]
     
     @classmethod
-    def auto_discover(cls):
-        """自动发现并注册所有条件"""
-        if cls._initialized:
+    def auto_discover(cls, force: bool = False):
+        """自动发现并注册所有条件
+        
+        Args:
+            force: 是否强制重新扫描，即使已经初始化过
+        """
+        if cls._initialized and not force:
             return
+        
+        if force:
+            cls._filters = {}
         
         builtins_dir = Path(__file__).parent / 'builtins'
         if not builtins_dir.exists():

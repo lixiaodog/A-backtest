@@ -23,7 +23,7 @@ class SQLiteProvider(DataProvider):
     """
     
     def __init__(self, 
-                 db_path: str = './data/stocks.db',
+                 db_path: str = 'data/stocks.db',
                  table_name: str = 'stock_data',
                  code_column: str = 'stock_code',
                  date_column: str = 'date'):

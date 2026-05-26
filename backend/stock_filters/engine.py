@@ -20,7 +20,7 @@ class FilterEngine:
     
     def _load_stock_info(self):
         """加载股票信息"""
-        stock_info_path = 'data/STOCK_INFO.json'
+        stock_info_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'STOCK_INFO.json')
         if os.path.exists(stock_info_path):
             try:
                 with open(stock_info_path, 'r', encoding='utf-8') as f:
@@ -121,7 +121,7 @@ class FilterEngine:
         return True
     
     def apply_filters(self, stock_list: List[str], market: str = None, period: str = '1d', 
-                      predict_date: str = None, data_days: int = 100) -> List[str]:
+                      predict_date: str = None, data_days: int = 100, data_provider=None) -> List[str]:
         """应用所有筛选条件（模型预测前）
         
         Args:
@@ -130,6 +130,7 @@ class FilterEngine:
             period: 周期 (1d)
             predict_date: 预测日期
             data_days: 加载的天数
+            data_provider: 数据提供者实例（可选）
             
         Returns:
             筛选后的股票列表
@@ -138,9 +139,11 @@ class FilterEngine:
         if not enabled_filters:
             return stock_list
         
-        from backend.providers.local_provider import LocalDataProvider
+        if data_provider is None:
+            from backend.providers.local_provider import LocalDataProvider
+            data_provider = LocalDataProvider(silent=True)
         
-        data_provider = LocalDataProvider(silent=True)
+        import pandas as pd
         
         result = []
         for stock_code in stock_list:
@@ -152,12 +155,21 @@ class FilterEngine:
                     stock_code, 
                     market=market, 
                     period=period,
-                    days=data_days
+                    days=data_days,
+                    end_date=predict_date
                 )
                 if df is not None and not df.empty:
                     stock_data = df
             except Exception as e:
                 pass
+            
+            # 检查预测日期是否有数据
+            if predict_date and stock_data is not None and not stock_data.empty:
+                last_date = stock_data.index[-1]
+                predict_dt = pd.to_datetime(predict_date)
+                if last_date.date() != predict_dt.date():
+                    # 预测日期没有数据，跳过该股票
+                    continue
             
             filter_context = {
                 'stock_code': stock_code,

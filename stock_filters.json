@@ -1,0 +1,142 @@
+{
+  "filters": [
+    {
+      "id": "exclude_st_001",
+      "name": "排除ST股票",
+      "description": "排除名称包含ST、*ST、SST、S*ST的股票",
+      "category": "fundamental",
+      "filter_stage": "pre_filter",
+      "condition_type": "exclude_st",
+      "parameters": {},
+      "enabled": true,
+      "priority": 1,
+      "created_at": "2026-05-06T18:00:00.000000",
+      "updated_at": "2026-05-06T18:00:00.000000"
+    },
+    {
+      "id": "exclude_new_stock_001",
+      "name": "排除新股",
+      "description": "排除上市不足60天的新股",
+      "category": "fundamental",
+      "filter_stage": "pre_filter",
+      "condition_type": "exclude_new_stock",
+      "parameters": {
+        "min_listing_days": 60
+      },
+      "enabled": true,
+      "priority": 2,
+      "created_at": "2026-05-06T18:00:00.000000",
+      "updated_at": "2026-05-06T18:00:00.000000"
+    },
+    {
+      "id": "17b9b7d1",
+      "name": "M20支撑长下影",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "ma20_support",
+      "parameters": {
+        "ma_period": 20,
+        "min_lower_shadow_ratio": 0.5,
+        "touch_threshold": 5
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-19T14:25:45.286214",
+      "updated_at": "2026-05-19T14:25:45.286214"
+    },
+    {
+      "id": "cc720fcf",
+      "name": "连续15天在MA120之上",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "ma_above",
+      "parameters": {
+        "consecutive_days": 15,
+        "direction": "above",
+        "ma_period": 120,
+        "start_offset": -1
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-19T15:01:14.527399",
+      "updated_at": "2026-05-19T15:01:14.527399"
+    },
+    {
+      "id": "e5bb2611",
+      "name": "连续下行3天",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "consecutive_new_high_low",
+      "parameters": {
+        "consecutive_days": 3,
+        "direction": "new_low",
+        "offset_days": -1
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-19T17:44:52.825134",
+      "updated_at": "2026-05-19T17:44:52.825134"
+    },
+    {
+      "id": "31ecfa0e",
+      "name": "连续3天新低",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "consecutive_new_high_low",
+      "parameters": {
+        "consecutive_days": 3,
+        "direction": "new_low",
+        "offset_days": 0
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-20T01:21:03.287269",
+      "updated_at": "2026-05-20T01:21:03.287269"
+    },
+    {
+      "id": "aea6b1b4",
+      "name": "连续10天在M20之上",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "ma_above",
+      "parameters": {
+        "consecutive_days": 10,
+        "direction": "above",
+        "ma_period": 20,
+        "start_offset": -1
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-20T01:22:51.579777",
+      "updated_at": "2026-05-20T01:22:51.579777"
+    },
+    {
+      "id": "44a75df9",
+      "name": "DMISLOP普通买入信号",
+      "description": "",
+      "category": "technical",
+      "filter_stage": "pre_filter",
+      "condition_type": "dmislop_filter",
+      "parameters": {
+        "adx_period": 14,
+        "ma100_period": 10,
+        "ma1_period": 7,
+        "ma2_period": 21,
+        "pdi_threshold": 30,
+        "prev_signal_type": "任意",
+        "signal_type": "buy",
+        "slope_down": -0.3,
+        "slope_up": 0.3
+      },
+      "enabled": true,
+      "priority": 0,
+      "created_at": "2026-05-20T01:31:57.258393",
+      "updated_at": "2026-05-20T01:31:57.258393"
+    }
+  ]
+}
