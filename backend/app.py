@@ -2534,9 +2534,9 @@ def _run_factor_cache_task(task_id, task_type, stock_codes=None, mode='thread'):
         
         # 创建数据提供器
         log('创建数据提供器...')
-        # 获取项目根目录（backend的上级目录）
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_path = os.path.join(project_root, 'data')
+        # 获取backend目录（当前文件的上级目录）
+        backend_dir = os.path.dirname(os.path.abspath(__file__))
+        data_path = os.path.join(backend_dir, 'data')
         log(f'数据路径: {data_path}')
         
         provider = ProviderFactory.create_provider('local', data_path=data_path)

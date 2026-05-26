@@ -7,10 +7,10 @@ import os
 
 def _get_default_cache_path() -> str:
     """获取默认缓存路径（绝对路径）"""
-    # 当前文件在 backend/factor_cache/ 下，项目根目录是上两级
+    # 当前文件在 backend/factor_cache/ 下，backend目录是上一级
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    return os.path.join(project_root, 'data', 'factor_cache')
+    backend_dir = os.path.dirname(current_dir)
+    return os.path.join(backend_dir, 'data', 'factor_cache')
 
 
 class FactorStoreRouter:
